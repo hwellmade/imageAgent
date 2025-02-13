@@ -57,6 +57,9 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # ML specific
 *.h5
@@ -90,5 +93,10 @@ data/
 
 # OS specific
 .DS_Store
-Thumbs.db 
+Thumbs.db
 
+# Output and data directories
+output_data/
+**/output_data/
+debug/
+**/debug/
