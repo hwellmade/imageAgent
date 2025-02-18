@@ -34,6 +34,9 @@ function App() {
   // Browser detection
   const isFirefox = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('firefox')
   
+  // Reference for tracking double tap timing
+  const lastTapRef = useRef<number>(0);
+  
   // Add utility function for image optimization
   const optimizeImage = async (file: File | Blob, maxDimension: number = 1920): Promise<Blob> => {
     return new Promise((resolve) => {
@@ -374,15 +377,26 @@ function App() {
                           }
                         }}
                         onTouchStart={(e) => {
-                          // Prevent zoom on double tap
-                          e.preventDefault();
+                          const now = Date.now();
+                          const timeDiff = now - lastTapRef.current;
+                          
+                          if (timeDiff < 300 && overlayImage) { // Double tap detected
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setShowOverlay(!showOverlay);
+                            console.log('Toggling overlay via double tap:', !showOverlay);
+                            lastTapRef.current = 0; // Reset to prevent triple-tap
+                          } else {
+                            lastTapRef.current = now;
+                          }
                         }}
-                        title="Double-click or use toggle button to switch views"
+                        title="Double-click/tap or use toggle button to switch views"
                       >
                         <img
                           src={showOverlay ? overlayImage || selectedImage : selectedImage}
                           alt="Selected"
                           className="w-full h-full object-contain"
+                          style={{ touchAction: 'manipulation' }}
                         />
                       </div>
                       {overlayImage && (
