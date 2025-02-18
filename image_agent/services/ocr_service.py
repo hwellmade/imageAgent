@@ -2,13 +2,15 @@ import sys
 from typing import List, Dict, Any, Optional
 from google.cloud import vision
 import io
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import math
 from pathlib import Path
 import os
 import logging
 from datetime import datetime
 import asyncio
+from functools import lru_cache
+import hashlib
 
 # Configure service-specific logging
 logger = logging.getLogger(__name__)
@@ -47,6 +49,16 @@ class OCRService:
         self._temp_dir = self._upload_dir / "temp"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         logger.info("[OCR Service] Directory setup complete")
+        
+        # Cache for font objects
+        self._font_cache = {}
+        # Cache for processed images
+        self._image_cache = {}
+        # Cache for OCR results
+        self._ocr_cache = {}
+        
+        # Maximum cache size (adjust based on memory constraints)
+        self._max_cache_size = 100
 
     def _reinitialize_client(self):
         """Reinitialize the Google Vision client if needed."""
@@ -274,106 +286,97 @@ class OCRService:
         logger.info(f"[OCR Service] Total overlay drawing duration: {(end_time - start_time).total_seconds():.2f}s")
         return output_path
 
+    def _get_image_hash(self, image_content: bytes) -> str:
+        """Generate a hash for image content."""
+        return hashlib.md5(image_content).hexdigest()
+        
+    def _optimize_image(self, image: Image.Image, max_dimension: int = 1920) -> Image.Image:
+        """Optimize image size and quality for OCR."""
+        # Resize if needed
+        width, height = image.size
+        if width > max_dimension or height > max_dimension:
+            if width > height:
+                new_width = max_dimension
+                new_height = int((height * max_dimension) / width)
+            else:
+                new_height = max_dimension
+                new_width = int((width * max_dimension) / height)
+            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+        # Convert to RGB if needed
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+            
+        # Enhance image for better OCR
+        image = ImageOps.autocontrast(image)
+        
+        return image
+        
+    @lru_cache(maxsize=100)
+    def _get_font(self, font_name: str, size: int) -> ImageFont.FreeTypeFont:
+        """Cached font loading."""
+        try:
+            return ImageFont.truetype(font_name, size)
+        except:
+            return ImageFont.load_default()
+            
     async def detect_text(self, 
                          file: Any,
                          source_lang: str = 'auto',
                          saved_file_path: str | None = None) -> tuple[list[dict], str | None]:
-        """Detect text in the image using Google Cloud Vision."""
+        """Detect text in the image using Google Cloud Vision with caching."""
         start_time = datetime.now()
         logger.info(f"[OCR Service] Starting text detection at {start_time.strftime('%H:%M:%S.%f')}")
         
         try:
-            if not self._initialized:
-                logger.warning("[OCR Service] Client not initialized, attempting to reinitialize")
-                if not self._reinitialize_client():
-                    raise Exception("Google Vision client is not available")
-
-            # Read file content
+            # Read and hash image content
             read_start = datetime.now()
-            logger.info(f"[OCR Service] Starting file read at {read_start.strftime('%H:%M:%S.%f')}")
             if hasattr(file, 'read'):
                 contents = await file.read()
             else:
                 with open(saved_file_path, 'rb') as f:
                     contents = f.read()
-            read_end = datetime.now()
-            logger.info(f"[OCR Service] File read completed at {read_end.strftime('%H:%M:%S.%f')}")
             
-            # Perform OCR with retry
-            max_retries = 3
-            retry_count = 0
-            last_error = None
+            image_hash = self._get_image_hash(contents)
             
-            while retry_count < max_retries:
-                try:
-                    vision_start = datetime.now()
-                    logger.info(f"[OCR Service] Starting Google Vision API call (attempt {retry_count + 1}) at {vision_start.strftime('%H:%M:%S.%f')}")
-                    image = vision.Image(content=contents)
-                    response = self._client.text_detection(image=image)
-                    texts = response.text_annotations
-                    vision_end = datetime.now()
-                    logger.info(f"[OCR Service] Google Vision API completed at {vision_end.strftime('%H:%M:%S.%f')}")
-                    break
-                except Exception as e:
-                    last_error = e
-                    retry_count += 1
-                    logger.warning(f"[OCR Service] API call failed (attempt {retry_count}): {str(e)}")
-                    if retry_count < max_retries:
-                        self._reinitialize_client()
-                        await asyncio.sleep(1)
-                    else:
-                        raise Exception(f"Failed to perform OCR after {max_retries} attempts: {str(last_error)}")
+            # Check cache for existing results
+            if image_hash in self._ocr_cache:
+                logger.info("[OCR Service] Using cached OCR results")
+                return self._ocr_cache[image_hash]
+            
+            # Optimize image before OCR
+            image = Image.open(io.BytesIO(contents))
+            optimized_image = self._optimize_image(image)
+            optimized_contents = io.BytesIO()
+            optimized_image.save(optimized_contents, format='JPEG', quality=85)
+            optimized_contents = optimized_contents.getvalue()
+            
+            # Perform OCR with optimized image
+            vision_image = vision.Image(content=optimized_contents)
+            response = self._client.text_detection(image=vision_image)
+            texts = response.text_annotations
             
             if not texts:
-                logger.warning(f"[OCR Service] No text detected at {datetime.now().strftime('%H:%M:%S.%f')}")
                 return [], None
-            
-            # Generate overlay
-            overlay_start = datetime.now()
-            logger.info(f"[OCR Service] Starting overlay generation at {overlay_start.strftime('%H:%M:%S.%f')}")
-            
-            # Always use the saved file path's directory for the overlay
+                
+            # Generate overlay with optimized image
             if saved_file_path:
-                temp_path = saved_file_path
+                # Save optimized image
+                optimized_image.save(saved_file_path, quality=85)
                 output_path = str(Path(saved_file_path).parent / f"{Path(saved_file_path).stem}_overlay.jpg")
-                logger.info(f"[OCR Service] Using saved file path for overlay: {output_path}")
             else:
                 temp_path = self._get_temp_path("temp_image.jpg")
-                with open(temp_path, "wb") as f:
-                    f.write(contents)
+                optimized_image.save(temp_path, quality=85)
                 output_path = str(Path(temp_path).parent / f"{Path(temp_path).stem}_overlay.jpg")
-                logger.info(f"[OCR Service] Using temp path for overlay: {output_path}")
             
-            # Ensure the output directory exists
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            # Draw overlay
+            self._draw_text_overlay(saved_file_path or temp_path, texts, output_path)
             
-            # Draw the overlay
-            self._draw_text_overlay(temp_path, texts, output_path)
-            
-            # Verify the overlay file was created
-            if not Path(output_path).exists():
-                logger.error(f"[OCR Service] Failed to create overlay file at: {output_path}")
-                raise Exception("Failed to create overlay image")
-            else:
-                logger.info(f"[OCR Service] Successfully created overlay file at: {output_path}")
-            
-            # Clean up temp file if needed
-            if not saved_file_path and Path(temp_path).exists():
-                Path(temp_path).unlink()
-            
-            overlay_end = datetime.now()
-            logger.info(f"[OCR Service] Overlay generation completed at {overlay_end.strftime('%H:%M:%S.%f')}")
-            
-            # Format results - similar to test script but with our improvements
-            format_start = datetime.now()
-            logger.info(f"[OCR Service] Starting result formatting at {format_start.strftime('%H:%M:%S.%f')}")
+            # Format and cache results
             detected_texts = []
-            
-            # Skip the first text annotation as it contains the full text
             for text in texts[1:]:
                 vertices = text.bounding_poly.vertices
                 bbox = [[vertex.x, vertex.y] for vertex in vertices]
-                
                 detected_texts.append({
                     'text': text.description.strip(),
                     'confidence': getattr(text, 'confidence', 0.99),
@@ -381,39 +384,24 @@ class OCRService:
                     'language': source_lang
                 })
             
-            # Sort texts by position (top to bottom, left to right)
-            detected_texts.sort(key=lambda x: (
-                sum(point[1] for point in x['bounding_box']) / len(x['bounding_box']),  # Average Y
-                sum(point[0] for point in x['bounding_box']) / len(x['bounding_box'])   # Average X
-            ))
-            
-            # Get the relative path for the overlay image
             relative_output_path = str(Path(output_path).relative_to(self._base_dir)).replace("\\", "/")
             if not relative_output_path.startswith('uploads/'):
                 relative_output_path = f"uploads/{relative_output_path}"
-            logger.info(f"[OCR Service] Relative overlay path: {relative_output_path}")
+                
+            # Cache results
+            result = (detected_texts, relative_output_path)
+            self._ocr_cache[image_hash] = result
             
-            format_end = datetime.now()
-            logger.info(f"[OCR Service] Result formatting completed at {format_end.strftime('%H:%M:%S.%f')}")
-            logger.info(f"[OCR Service] Returning {len(detected_texts)} text detections")
-            
-            if response.error.message:
-                raise Exception(
-                    '{}\nFor more info on error messages, check: '
-                    'https://cloud.google.com/apis/design/errors'.format(
-                        response.error.message))
-            
-            end_time = datetime.now()
-            logger.info(f"[OCR Service] Text detection completed at {end_time.strftime('%H:%M:%S.%f')}")
-            logger.info(f"[OCR Service] Total detection duration: {(end_time - start_time).total_seconds():.2f}s")
-            
-            return detected_texts, relative_output_path
+            # Manage cache size
+            if len(self._ocr_cache) > self._max_cache_size:
+                # Remove oldest entry
+                self._ocr_cache.pop(next(iter(self._ocr_cache)))
+                
+            return result
             
         except Exception as e:
-            error_time = datetime.now()
-            logger.error(f"[OCR Service] Error occurred at {error_time.strftime('%H:%M:%S.%f')}")
-            logger.error(f"[OCR Service] Error after {(error_time - start_time).total_seconds():.2f}s: {str(e)}")
-            raise Exception(f"Failed to perform OCR: {str(e)}")
+            logger.error(f"[OCR Service] Error: {str(e)}")
+            raise
 
 # Create a singleton instance
 ocr_service = OCRService() 

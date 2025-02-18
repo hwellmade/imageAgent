@@ -34,25 +34,69 @@ function App() {
   // Browser detection
   const isFirefox = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('firefox')
   
-  // Process image for OCR
+  // Add utility function for image optimization
+  const optimizeImage = async (file: File | Blob, maxDimension: number = 1920): Promise<Blob> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        // Calculate new dimensions while maintaining aspect ratio
+        let width = img.width;
+        let height = img.height;
+        if (width > height && width > maxDimension) {
+          height = (height * maxDimension) / width;
+          width = maxDimension;
+        } else if (height > maxDimension) {
+          width = (width * maxDimension) / height;
+          height = maxDimension;
+        }
+
+        // Create canvas and resize image
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Failed to get canvas context');
+        
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Convert to blob with reasonable quality
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              console.log(`[Timing] Image optimized from ${file.size} to ${blob.size} bytes`);
+              resolve(blob);
+            }
+          },
+          'image/jpeg',
+          0.85  // Adjust quality for better compression
+        );
+      };
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
+  // Modify processImageForOCR to use optimized image
   const processImageForOCR = async (file: File | Blob) => {
+    const processStartTime = performance.now();
+    console.log('[Timing] Starting OCR process...');
     setLoading(true);
     setError(null);
     
     try {
+      // Optimize image before sending
+      console.log('[Timing] Starting image optimization...');
+      const optimizeStartTime = performance.now();
+      const optimizedImage = await optimizeImage(file);
+      console.log(`[Timing] Image optimization took ${(performance.now() - optimizeStartTime).toFixed(2)}ms`);
+
+      // Create form data with optimized image
       const formData = new FormData();
-      
-      // Handle both File and Blob types
-      if (file instanceof File) {
-        formData.append('file', file);
-      } else {
-        // Convert Blob to File with a generated name
-        formData.append('file', new File([file], `image_${Date.now()}.jpg`, { type: 'image/jpeg' }));
-      }
-      
+      formData.append('file', optimizedImage, `image_${Date.now()}.jpg`);
       formData.append('source_lang', sourceLanguage);
-      
-      console.log('Sending OCR request to backend...');
+
+      // Send OCR request
+      console.log('[Timing] Sending OCR request to backend...');
+      const requestStartTime = performance.now();
       const response = await fetch(`${BACKEND_URL}/ocr`, {
         method: 'POST',
         body: formData,
@@ -62,18 +106,50 @@ function App() {
         throw new Error(`OCR request failed: ${response.statusText}`);
       }
 
-      const data = await response.json();
-      console.log('OCR Response:', data);
+      const responseTime = performance.now();
+      console.log(`[Timing] Backend request took ${(responseTime - requestStartTime).toFixed(2)}ms`);
 
+      const data = await response.json();
+      
       if (data.overlay_image) {
-        // Use the overlay URL directly from the response
         const overlayUrl = process.env.NODE_ENV === 'production'
           ? data.overlay_image
           : `http://${window.location.hostname}:8000${data.overlay_image}`;
         
-        console.log('Setting overlay image URL:', overlayUrl);
-        setOverlayImage(overlayUrl);
-        setShowOverlay(true);
+        console.log('[Timing] Starting overlay image loading...');
+        const overlayStartTime = performance.now();
+        
+        // Preload image with timeout
+        const loadImage = async (url: string, timeout: number = 10000): Promise<void> => {
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            const timeoutId = setTimeout(() => {
+              reject(new Error('Image loading timed out'));
+            }, timeout);
+            
+            img.onload = () => {
+              clearTimeout(timeoutId);
+              setOverlayImage(url);
+              setShowOverlay(true);
+              resolve();
+            };
+            
+            img.onerror = () => {
+              clearTimeout(timeoutId);
+              reject(new Error('Failed to load image'));
+            };
+            
+            img.src = url;
+          });
+        };
+
+        try {
+          await loadImage(overlayUrl);
+          console.log(`[Timing] Overlay image loaded in ${(performance.now() - overlayStartTime).toFixed(2)}ms`);
+        } catch (error) {
+          console.error('Error loading overlay:', error);
+          setError('Failed to load overlay image. Please try again.');
+        }
       } else {
         console.log('No overlay image in response');
         setOverlayImage(null);
@@ -86,6 +162,7 @@ function App() {
       setShowOverlay(false);
     } finally {
       setLoading(false);
+      console.log(`[Timing] Total OCR process took ${(performance.now() - processStartTime).toFixed(2)}ms`);
     }
   };
   
@@ -124,16 +201,24 @@ function App() {
       return
     }
 
+    const startTime = performance.now();
+    console.log(`[Timing] Translation process started at ${new Date().toISOString()}`);
+    
     try {
       setLoading(true)
       // Convert data URL to Blob
+      console.log('[Timing] Starting data URL to Blob conversion...');
+      const blobStartTime = performance.now();
       const response = await fetch(selectedImage)
       const blob = await response.blob()
+      console.log(`[Timing] Blob conversion took ${(performance.now() - blobStartTime).toFixed(2)}ms`);
+      
       await processImageForOCR(blob)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process image')
     } finally {
       setLoading(false)
+      console.log(`[Timing] Total process took ${(performance.now() - startTime).toFixed(2)}ms`);
     }
   }
   
