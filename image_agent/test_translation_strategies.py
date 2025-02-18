@@ -1,79 +1,124 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import asyncio
 from pathlib import Path
 import json
 from datetime import datetime
 import logging
+import re
+from statistics import mean, stdev
+from dataclasses import dataclass
+import numpy as np
+from sklearn.cluster import DBSCAN
 from .services.translation_service import translation_service
 from .services.ocr_service import ocr_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+@dataclass
+class TextBlock:
+    text: str
+    bbox: List[List[float]]
+    center: Tuple[float, float]
+    area: float
+
 class TranslationTest:
     def __init__(self):
         self.results: Dict[str, Any] = {}
+        
+    def _split_into_sentences(self, texts: List[Dict[str, Any]]) -> List[str]:
+        """Split texts into sentences based on punctuation and spacing."""
+        # Sort texts by position (top to bottom, left to right)
+        sorted_texts = sorted(texts, key=lambda t: (
+            sum(p[1] for p in t['bounding_box']) / len(t['bounding_box']),
+            sum(p[0] for p in t['bounding_box']) / len(t['bounding_box'])
+        ))
+        
+        # Combine all text with their original spacing
+        combined_text = ""
+        for text in sorted_texts:
+            combined_text += text['text'] + " "
+            
+        # Define sentence delimiters
+        delimiters = r'[,.．。，：:;；()（）\[\]「」『』\'\""\s]+'
+        
+        # Split into sentences while preserving delimiters
+        parts = re.split(f'({delimiters})', combined_text)
+        
+        # Recombine parts into proper sentences
+        sentences = []
+        current_sentence = ""
+        
+        for part in parts:
+            current_sentence += part
+            if re.search(r'[.．。!\?！？]', part):
+                if current_sentence.strip():
+                    sentences.append(current_sentence.strip())
+                current_sentence = ""
+        
+        # Add any remaining text as a sentence
+        if current_sentence.strip():
+            sentences.append(current_sentence.strip())
+            
+        return sentences
+        
+    def _calculate_text_block_features(self, text_dict: Dict[str, Any]) -> TextBlock:
+        """Calculate features for a text block."""
+        bbox = text_dict['bounding_box']
+        # Calculate center
+        center_x = sum(p[0] for p in bbox) / len(bbox)
+        center_y = sum(p[1] for p in bbox) / len(bbox)
+        # Calculate area
+        width = max(p[0] for p in bbox) - min(p[0] for p in bbox)
+        height = max(p[1] for p in bbox) - min(p[1] for p in bbox)
+        area = width * height
+        
+        return TextBlock(
+            text=text_dict['text'],
+            bbox=bbox,
+            center=(center_x, center_y),
+            area=area
+        )
     
-    def _group_by_proximity(self, texts: List[Dict[str, Any]], threshold: float = 50) -> List[List[Dict[str, Any]]]:
-        """Group text blocks that are close to each other."""
+    def _group_into_paragraphs(self, texts: List[Dict[str, Any]]) -> List[str]:
+        """Group texts into paragraphs using DBSCAN clustering with adaptive eps."""
         if not texts:
             return []
             
-        groups = []
-        current_group = [texts[0]]
+        # Convert texts to TextBlock objects with features
+        text_blocks = [self._calculate_text_block_features(t) for t in texts]
         
-        for text in texts[1:]:
-            # Get the last text in current group
-            last_text = current_group[-1]
+        # Extract centers for clustering
+        centers = np.array([block.center for block in text_blocks])
+        
+        # Calculate adaptive eps based on nearest neighbor distances
+        from sklearn.neighbors import NearestNeighbors
+        k = min(2, len(centers))  # Use k=2 or less if we have fewer points
+        nbrs = NearestNeighbors(n_neighbors=k).fit(centers)
+        distances, _ = nbrs.kneighbors(centers)
+        
+        # Use the mean distance to nearest neighbor as eps
+        eps = np.mean(distances[:, 1]) if k > 1 else np.mean(distances)
+        
+        # Perform DBSCAN clustering
+        clustering = DBSCAN(eps=eps, min_samples=1).fit(centers)
+        
+        # Group texts by cluster
+        paragraphs = []
+        for cluster_id in range(max(clustering.labels_) + 1):
+            # Get indices of texts in this cluster
+            cluster_indices = np.where(clustering.labels_ == cluster_id)[0]
             
-            # Calculate distance between bounding boxes
-            last_box = last_text['bounding_box']
-            current_box = text['bounding_box']
+            # Sort texts in cluster by vertical position
+            cluster_texts = [text_blocks[i] for i in cluster_indices]
+            sorted_texts = sorted(cluster_texts, 
+                                key=lambda b: (b.center[1], b.center[0]))
             
-            # Use the center points of boxes for distance calculation
-            last_center_y = sum(point[1] for point in last_box) / len(last_box)
-            current_center_y = sum(point[1] for point in current_box) / len(current_box)
+            # Combine texts in cluster
+            paragraph = ' '.join(block.text for block in sorted_texts)
+            paragraphs.append(paragraph)
             
-            # If texts are close enough vertically, consider them part of the same group
-            if abs(current_center_y - last_center_y) < threshold:
-                current_group.append(text)
-            else:
-                groups.append(current_group)
-                current_group = [text]
-        
-        groups.append(current_group)
-        return groups
-    
-    def _group_by_lines(self, texts: List[Dict[str, Any]], line_height_threshold: float = 30) -> List[List[Dict[str, Any]]]:
-        """Group text blocks that appear to be on the same line."""
-        if not texts:
-            return []
-            
-        # Sort texts by vertical position (top to bottom)
-        sorted_texts = sorted(texts, key=lambda t: sum(point[1] for point in t['bounding_box']) / len(t['bounding_box']))
-        
-        lines = []
-        current_line = [sorted_texts[0]]
-        current_line_y = sum(point[1] for point in sorted_texts[0]['bounding_box']) / len(sorted_texts[0]['bounding_box'])
-        
-        for text in sorted_texts[1:]:
-            text_y = sum(point[1] for point in text['bounding_box']) / len(text['bounding_box'])
-            
-            if abs(text_y - current_line_y) < line_height_threshold:
-                current_line.append(text)
-            else:
-                # Sort texts in line by horizontal position
-                current_line.sort(key=lambda t: sum(point[0] for point in t['bounding_box']) / len(t['bounding_box']))
-                lines.append(current_line)
-                current_line = [text]
-                current_line_y = text_y
-        
-        # Add the last line
-        if current_line:
-            current_line.sort(key=lambda t: sum(point[0] for point in t['bounding_box']) / len(t['bounding_box']))
-            lines.append(current_line)
-        
-        return lines
+        return paragraphs
     
     async def test_translation_strategies(self, image_path: str, target_lang: str = 'en'):
         """Test different translation strategies on an image."""
@@ -82,8 +127,11 @@ class TranslationTest:
             start_time = datetime.now()
             
             # Perform OCR
-            with open(image_path, 'rb') as f:
-                texts, _ = await ocr_service.detect_text(f)
+            texts, _ = await ocr_service.detect_text(
+                file=None,
+                source_lang='auto',
+                saved_file_path=str(Path(image_path).absolute())
+            )
             
             if not texts:
                 logger.warning("No text detected in image")
@@ -92,71 +140,49 @@ class TranslationTest:
             # Store original texts
             self.results['original_texts'] = texts
             
-            # Strategy 1: Individual Translation
-            individual_translations = await translation_service.translate_text(
-                texts=[text['text'] for text in texts],
-                target_lang=target_lang
-            )
-            self.results['individual_translations'] = individual_translations
-            
-            # Strategy 2: Proximity-based Grouping
-            proximity_groups = self._group_by_proximity(texts)
-            grouped_texts = [' '.join(text['text'] for text in group) for group in proximity_groups]
-            proximity_translations = await translation_service.translate_text(
-                texts=grouped_texts,
-                target_lang=target_lang
-            )
-            self.results['proximity_translations'] = proximity_translations
-            
-            # Strategy 3: Line-based Grouping
-            line_groups = self._group_by_lines(texts)
-            line_texts = [' '.join(text['text'] for text in line) for line in line_groups]
-            line_translations = await translation_service.translate_text(
-                texts=line_texts,
-                target_lang=target_lang
-            )
-            self.results['line_translations'] = line_translations
-            
-            # Strategy 4: Full Context Translation
+            # Strategy 1: Full Content Translation
+            logger.info("\nStrategy 1: Full Content Translation")
             full_text = ' '.join(text['text'] for text in texts)
-            full_context_translation = await translation_service.translate_text(
+            full_translation = await translation_service.translate_text(
                 texts=[full_text],
                 target_lang=target_lang
             )
-            self.results['full_context_translation'] = full_context_translation
-            
-            # Log results
-            logger.info("\n=== Translation Results ===")
-            
-            logger.info("\nStrategy 1: Individual Translation")
-            for orig, trans in zip(texts, individual_translations):
-                logger.info(f"Original: {orig['text']}")
-                logger.info(f"Translated: {trans['translated_text']}")
-                logger.info("-" * 50)
-            
-            logger.info("\nStrategy 2: Proximity-based Grouping")
-            for group, trans in zip(proximity_groups, proximity_translations):
-                logger.info(f"Original Group: {' '.join(text['text'] for text in group)}")
-                logger.info(f"Translated: {trans['translated_text']}")
-                logger.info("-" * 50)
-            
-            logger.info("\nStrategy 3: Line-based Grouping")
-            for line, trans in zip(line_groups, line_translations):
-                logger.info(f"Original Line: {' '.join(text['text'] for text in line)}")
-                logger.info(f"Translated: {trans['translated_text']}")
-                logger.info("-" * 50)
-            
-            logger.info("\nStrategy 4: Full Context Translation")
+            self.results['full_content_translation'] = full_translation
             logger.info(f"Original Full Text: {full_text}")
-            logger.info(f"Translated Full Text: {full_context_translation[0]['translated_text']}")
+            logger.info(f"Translated Full Text: {full_translation[0]['translated_text']}")
             logger.info("-" * 50)
             
-            # Compare translation lengths and token counts
+            # Strategy 2: Sentence-based Translation
+            logger.info("\nStrategy 2: Sentence-based Translation")
+            sentences = self._split_into_sentences(texts)
+            sentence_translations = await translation_service.translate_text(
+                texts=sentences,
+                target_lang=target_lang
+            )
+            self.results['sentence_translations'] = sentence_translations
+            for orig, trans in zip(sentences, sentence_translations):
+                logger.info(f"Original Sentence: {orig}")
+                logger.info(f"Translated: {trans['translated_text']}")
+                logger.info("-" * 50)
+            
+            # Strategy 3: Paragraph-based Translation
+            logger.info("\nStrategy 3: Paragraph-based Translation")
+            paragraphs = self._group_into_paragraphs(texts)
+            paragraph_translations = await translation_service.translate_text(
+                texts=paragraphs,
+                target_lang=target_lang
+            )
+            self.results['paragraph_translations'] = paragraph_translations
+            for orig, trans in zip(paragraphs, paragraph_translations):
+                logger.info(f"Original Paragraph: {orig}")
+                logger.info(f"Translated: {trans['translated_text']}")
+                logger.info("-" * 50)
+            
+            # Compare translation statistics
             logger.info("\n=== Translation Statistics ===")
-            logger.info(f"Individual Translations: {len(individual_translations)} segments")
-            logger.info(f"Proximity Groups: {len(proximity_translations)} segments")
-            logger.info(f"Line Groups: {len(line_translations)} segments")
-            logger.info("Full Context: 1 segment")
+            logger.info(f"Full Content: 1 API call")
+            logger.info(f"Sentences: {len(sentences)} segments in 1 API call")
+            logger.info(f"Paragraphs: {len(paragraphs)} segments in 1 API call")
             
             # Save results to file
             output_file = Path(image_path).parent / f"translation_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"

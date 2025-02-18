@@ -239,9 +239,12 @@ class OCRService:
                 fill='white',
                 anchor="mm"
             )
-            
+            # breakpoint()
             # Rotate text
-            txt = txt.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+            if angle < 0:
+                txt = txt.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
+            else:
+                txt = txt.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
             
             # Calculate paste position
             paste_x = int(center_x - txt.width/2)

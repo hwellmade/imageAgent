@@ -1,6 +1,9 @@
 from typing import List, Dict, Any, Optional as OptionalType
-from google.cloud import translate
+from google.cloud.translate_v2 import Client as TranslateClient
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TranslationService:
     """Service for translating text using Google Cloud Translation."""
@@ -11,12 +14,15 @@ class TranslationService:
         self._initialized = False
         try:
             if self._project_id:
-                self._client = translate.TranslationServiceClient()
-                self._location = "global"
+                self._client = TranslateClient()
                 self._initialized = True
+                logger.info("Translation service initialized successfully")
+            else:
+                raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set")
         except Exception as e:
-            print(f"Warning: Translation service not initialized: {str(e)}")
-            print("Translation features will be disabled.")
+            logger.error(f"Translation service initialization failed: {str(e)}")
+            logger.error("Translation features will be disabled")
+            raise RuntimeError(f"Failed to initialize translation service: {str(e)}")
         
     async def translate_text(self,
                            texts: List[str],
@@ -32,54 +38,43 @@ class TranslationService:
             
         Returns:
             List of dictionaries containing original and translated texts
+        
+        Raises:
+            RuntimeError: If translation service is not initialized or translation fails
         """
         if not self._initialized:
-            # Return original texts with a note that translation is unavailable
-            return [{
-                'original_text': text,
-                'translated_text': text,
-                'detected_source_language': 'unknown',
-                'target_language': target_lang,
-                'note': 'Translation service not available'
-            } for text in texts]
+            raise RuntimeError("Translation service is not properly initialized")
             
         try:
             if not texts:
                 return []
             
-            parent = f"projects/{self._project_id}/locations/{self._location}"
-            
-            response = self._client.translate_text(
-                request={
-                    "parent": parent,
-                    "contents": texts,
-                    "target_language_code": target_lang,
-                    "source_language_code": source_lang if source_lang else "",
-                    "mime_type": "text/plain",
-                }
+            # Batch translate all texts in a single API call
+            results = self._client.translate(
+                texts,
+                target_language=target_lang,
+                source_language=source_lang
             )
             
-            # Format results
+            # Process results
             translations = []
-            for translation in response.translations:
+            for text, result in zip(texts, results):
                 translations.append({
-                    'original_text': texts[len(translations)],  # Match with original text
-                    'translated_text': translation.translated_text,
-                    'detected_source_language': translation.detected_language_code,
+                    'original_text': text,
+                    'translated_text': result['translatedText'],
+                    'detected_source_language': result.get('detectedSourceLanguage', source_lang or 'unknown'),
                     'target_language': target_lang
                 })
+            
+            # Log translation statistics
+            char_count = sum(len(text) for text in texts)
+            logger.info(f"Translated {len(texts)} texts ({char_count} characters) in one API call")
             
             return translations
             
         except Exception as e:
-            # On error, return original texts
-            return [{
-                'original_text': text,
-                'translated_text': text,
-                'detected_source_language': 'unknown',
-                'target_language': target_lang,
-                'error': str(e)
-            } for text in texts]
+            logger.error(f"Translation failed: {str(e)}")
+            raise RuntimeError(f"Translation failed: {str(e)}")
     
     async def detect_language(self, text: str) -> Dict[str, Any]:
         """
@@ -90,36 +85,26 @@ class TranslationService:
             
         Returns:
             Dictionary containing detected language and confidence
+        
+        Raises:
+            RuntimeError: If language detection fails
         """
         if not self._initialized:
-            return {
-                'language': 'unknown',
-                'confidence': 0.0,
-                'note': 'Language detection service not available'
-            }
+            raise RuntimeError("Translation service is not properly initialized")
             
         try:
-            parent = f"projects/{self._project_id}/locations/{self._location}"
+            result = self._client.detect_language(text)
             
-            response = self._client.detect_language(
-                request={
-                    "parent": parent,
-                    "content": text,
-                    "mime_type": "text/plain",
-                }
-            )
-            
-            detection = response.languages[0]
+            if isinstance(result, list):
+                result = result[0]
+                
             return {
-                'language': detection.language_code,
-                'confidence': detection.confidence
+                'language': result['language'],
+                'confidence': result.get('confidence', 0.0)
             }
         except Exception as e:
-            return {
-                'language': 'unknown',
-                'confidence': 0.0,
-                'error': str(e)
-            }
+            logger.error(f"Language detection failed: {str(e)}")
+            raise RuntimeError(f"Language detection failed: {str(e)}")
 
 # Create a singleton instance
 translation_service = TranslationService() 
