@@ -143,6 +143,26 @@ class OCRService:
         # Clamp the font size between reasonable limits
         return int(max(12, min(40, base_size)))
 
+    def _calculate_uniform_font_size(self, texts: list, image_height: int) -> int:
+        """Calculate a uniform font size based on the average text block height."""
+        # Get average height of text blocks
+        heights = []
+        for text in texts:
+            vertices = text.bounding_poly.vertices
+            points = [(vertex.x, vertex.y) for vertex in vertices]
+            height = math.sqrt((points[3][0] - points[0][0])**2 + (points[3][1] - points[0][1])**2)
+            heights.append(height)
+        
+        # Use median height to avoid outliers
+        median_height = sorted(heights)[len(heights)//2]
+        
+        # Scale font size relative to image height (adjust these values as needed)
+        relative_size = median_height / image_height
+        base_font_size = int(relative_size * 40)  # 40 is a scaling factor
+        
+        # Clamp to reasonable limits
+        return max(16, min(32, base_font_size))
+
     def _draw_text_overlay(self, image_path: str, texts: list, output_path: str | None = None) -> str:
         """Draw detected text and bounding boxes on the image."""
         start_time = datetime.now()
@@ -152,6 +172,10 @@ class OCRService:
         image_start = datetime.now()
         logger.info(f"[OCR Service] Starting image load at {image_start.strftime('%H:%M:%S.%f')}")
         image = Image.open(image_path)
+        
+        # Calculate uniform font size based on image size
+        uniform_font_size = self._calculate_uniform_font_size(texts[1:], image.height)
+        logger.info(f"[OCR Service] Using uniform font size: {uniform_font_size}")
         
         # Get original EXIF orientation
         try:
@@ -169,121 +193,80 @@ class OCRService:
         overlay = Image.new('RGBA', original_size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
         
-        # Load font once and cache it
+        # Load font once for all text
         font_start = datetime.now()
         logger.info(f"[OCR Service] Starting font loading at {font_start.strftime('%H:%M:%S.%f')}")
-        font_cache = {}  # Cache fonts by size
         try:
             base_font_name = "msgothic.ttc"
-            # Test with minimum size to verify font
-            ImageFont.truetype(base_font_name, 12)
+            font = ImageFont.truetype(base_font_name, uniform_font_size)
         except:
             try:
                 base_font_name = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-                ImageFont.truetype(base_font_name, 12)
+                font = ImageFont.truetype(base_font_name, uniform_font_size)
             except:
-                base_font_name = None
+                font = ImageFont.load_default()
                 logger.warning(f"[OCR Service] Failed to load custom font at {datetime.now().strftime('%H:%M:%S.%f')}, using default")
-        font_end = datetime.now()
-        logger.info(f"[OCR Service] Font loading completed at {font_end.strftime('%H:%M:%S.%f')}")
-        logger.info(f"[OCR Service] Font loading duration: {(font_end - font_start).total_seconds():.2f}s")
         
         # Process each text block
-        text_start = datetime.now()
-        logger.info(f"[OCR Service] Starting text processing at {text_start.strftime('%H:%M:%S.%f')}")
-        
-        # Pre-calculate all text parameters first
-        param_start = datetime.now()
-        text_params = []
-        for text in texts[1:]:
+        for text in texts[1:]:  # Skip the first text as it contains all text
             vertices = text.bounding_poly.vertices
             points = [(vertex.x, vertex.y) for vertex in vertices]
             
-            bbox_width = math.sqrt((points[1][0] - points[0][0])**2 + (points[1][1] - points[0][1])**2)
-            bbox_height = math.sqrt((points[3][0] - points[0][0])**2 + (points[3][1] - points[0][1])**2)
-            is_vertical = bbox_height > bbox_width
+            # Draw semi-transparent background
+            draw.polygon(points, fill=(0, 0, 0, 179))
+            draw.polygon(points, outline='red')
             
-            font_size = self._calculate_font_size(bbox_width, bbox_height, len(text.description), is_vertical)
-            
-            # Get or create font
-            if font_size not in font_cache:
-                try:
-                    font_cache[font_size] = ImageFont.truetype(base_font_name, font_size) if base_font_name else ImageFont.load_default()
-                except:
-                    font_cache[font_size] = ImageFont.load_default()
-            
-            angle = self._calculate_text_angle(points)
+            # Calculate center position
             center_x = sum(point[0] for point in points) / len(points)
             center_y = sum(point[1] for point in points) / len(points)
             
-            text_params.append({
-                'points': points,
-                'font': font_cache[font_size],
-                'angle': angle,
-                'center': (center_x, center_y),
-                'text': text.description,
-                'bbox_size': (bbox_width, bbox_height)
-            })
-        logger.info(f"[OCR Service] Parameter calculation completed at {datetime.now().strftime('%H:%M:%S.%f')}")
-        
-        # Draw all backgrounds first
-        bg_start = datetime.now()
-        logger.info(f"[OCR Service] Starting background drawing at {bg_start.strftime('%H:%M:%S.%f')}")
-        for params in text_params:
-            draw.polygon(params['points'], fill=(0, 0, 0, 179))
-            draw.polygon(params['points'], outline='red')
-        logger.info(f"[OCR Service] Background drawing completed at {datetime.now().strftime('%H:%M:%S.%f')}")
-        
-        # Then draw all text
-        text_draw_start = datetime.now()
-        logger.info(f"[OCR Service] Starting text drawing at {text_draw_start.strftime('%H:%M:%S.%f')}")
-        for params in text_params:
-            bbox_width, bbox_height = params['bbox_size']
+            # Calculate text angle
+            angle = self._calculate_text_angle(points)
+            
+            # Create temporary image for rotated text
+            bbox_width = max(p[0] for p in points) - min(p[0] for p in points)
+            bbox_height = max(p[1] for p in points) - min(p[1] for p in points)
             max_dim = max(bbox_width, bbox_height) * 2
+            
             txt = Image.new('RGBA', (int(max_dim), int(max_dim)), (0, 0, 0, 0))
             txt_draw = ImageDraw.Draw(txt)
             
+            # Preserve original text including symbols and punctuation
             txt_draw.text(
                 (txt.width/2, txt.height/2),
-                params['text'],
-                font=params['font'],
+                text.description,
+                font=font,
                 fill='white',
                 anchor="mm"
             )
             
-            txt = txt.rotate(params['angle'], expand=True, resample=Image.Resampling.BICUBIC)
+            # Rotate text
+            txt = txt.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
             
-            center_x, center_y = params['center']
+            # Calculate paste position
             paste_x = int(center_x - txt.width/2)
             paste_y = int(center_y - txt.height/2)
             
+            # Paste rotated text
             overlay.paste(txt, (paste_x, paste_y), txt)
         
-        text_draw_end = datetime.now()
-        logger.info(f"[OCR Service] Text drawing completed at {text_draw_end.strftime('%H:%M:%S.%f')}")
-        logger.info(f"[OCR Service] Text drawing duration: {(text_draw_end - text_draw_start).total_seconds():.2f}s")
-        
-        # After drawing is complete, composite the images
+        # Composite the overlay with the original image
         result = Image.alpha_composite(image.convert('RGBA'), overlay)
         
-        # Rotate the result back to original orientation if needed
+        # Handle orientation
         if orientation:
-            rotation_map = {
-                3: 180,
-                6: 270,
-                8: 90
-            }
+            rotation_map = {3: 180, 6: 270, 8: 90}
             if orientation in rotation_map:
                 result = result.rotate(rotation_map[orientation], expand=True)
-                logger.info(f"[OCR Service] Rotated result by {rotation_map[orientation]} degrees")
         
-        # Convert back to RGB for saving
+        # Save the result
+        if output_path is None:
+            output_path = str(Path(image_path).parent / f"{Path(image_path).stem}_overlay.jpg")
+        
         result = result.convert('RGB')
         result.save(output_path, quality=95)
         
-        end_time = datetime.now()
-        logger.info(f"[OCR Service] Overlay drawing completed at {end_time.strftime('%H:%M:%S.%f')}")
-        logger.info(f"[OCR Service] Total overlay drawing duration: {(end_time - start_time).total_seconds():.2f}s")
+        logger.info(f"[OCR Service] Overlay drawing completed in {(datetime.now() - start_time).total_seconds():.2f}s")
         return output_path
 
     def _get_image_hash(self, image_content: bytes) -> str:
