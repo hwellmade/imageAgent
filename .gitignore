@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 .env
+.env.*
 .venv
 env/
 venv/
@@ -100,3 +101,39 @@ output_data/
 **/output_data/
 debug/
 **/debug/
+my_designnote/
+**/my_designnote/
+
+# Application specific
+uploads/
+.env
+credentials.json
+
+# Credentials and Secrets
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.keystore
+*.jks
+*credentials*.json
+*credential*.json
+*secret*.json
+*secrets*.json
+*token*.json
+*api-key*.json
+.env.local
+.env.development
+.env.test
+.env.production
+.env*.local
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Logs
+*.log
+
