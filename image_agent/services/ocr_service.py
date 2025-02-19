@@ -150,34 +150,40 @@ class OCRService:
         # Clamp to reasonable limits
         return max(6, min(10, base_font_size))  # Reduced from (8, 16) to (6, 10)
 
-    def _calculate_box_angle(self, points: list) -> float:
-        """Calculate the angle of the bounding box."""
+    def _calculate_block_angle(self, points: list) -> float:
+        """Calculate the angle of a block based on its bounding box points."""
         # Get the points
         x1, y1 = points[0]  # bottom-left
         x2, y2 = points[1]  # bottom-right
         x3, y3 = points[2]  # top-right
+        x4, y4 = points[3]  # top-left
         
         # Calculate width and height
         width = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-        height = math.sqrt((x3 - x2)**2 + (y3 - y2)**2)
+        height = math.sqrt((x4 - x1)**2 + (y4 - y1)**2)
         
         # Determine if text is vertical based on aspect ratio
         is_vertical = height > width * 1.2
         
         if is_vertical:
-            # For vertical text, use the right edge
-            angle = math.degrees(math.atan2(y3 - y2, x3 - x2))
+            # For vertical text, use the left edge (bottom to top)
+            angle = math.degrees(math.atan2(y4 - y1, x4 - x1))
             # Add 90 degrees for vertical text
             angle += 90
         else:
-            # For horizontal text, use the bottom edge
+            # For horizontal text, use the bottom edge (left to right)
             angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
             
-        # Normalize angle to be between -90 and 90 degrees
-        while angle > 90:
-            angle -= 180
-        while angle < -90:
-            angle += 180
+        # Normalize angle to be between -180 and 180 degrees
+        while angle > 180:
+            angle -= 360
+        while angle < -180:
+            angle += 360
+            
+        # For vertical text, we need to adjust the angle
+        if is_vertical:
+            if angle > 0:
+                angle -= 180
             
         return angle
 
@@ -555,63 +561,76 @@ class OCRService:
                     draw.polygon([(x, y) for x, y in block_bbox], fill=(0, 0, 0, 160))
                     draw.polygon([(x, y) for x, y in block_bbox], outline=(65, 105, 225), width=1)
                     
-                    # Calculate block dimensions
+                    # Calculate block dimensions and angle
+                    block_angle = self._calculate_block_angle(block_bbox)
                     block_min_x = min(p[0] for p in block_bbox)
                     block_max_x = max(p[0] for p in block_bbox)
                     block_min_y = min(p[1] for p in block_bbox)
                     block_max_y = max(p[1] for p in block_bbox)
-                    block_height = block_max_y - block_min_y
                     block_width = block_max_x - block_min_x
+                    block_height = block_max_y - block_min_y
                     
-                    # Calculate base font size for this block
-                    base_font_size = int(min(block_height, block_width) / (len(lines) * 1.5))  # Adjust based on number of lines
-                    base_font_size = max(12, min(40, base_font_size))  # Clamp font size
+                    # Determine if block is vertical
+                    is_vertical = block_height > block_width * 1.2
                     
                     # Process each line in the block
-                    for i, line in enumerate(lines):
-                        # Calculate rotation angle from bounding box
-                        angle = self._calculate_box_angle(line['bounding_box'])
+                    for line in lines:
+                        # Get line bounding box
+                        line_bbox = line['bounding_box']
                         
-                        # Calculate line position within block
-                        line_y = float(block_min_y + (block_height * (i + 0.5)) / len(lines))
+                        # Calculate line dimensions
+                        line_width = math.sqrt((line_bbox[1][0] - line_bbox[0][0])**2 + 
+                                             (line_bbox[1][1] - line_bbox[0][1])**2)
+                        line_height = math.sqrt((line_bbox[3][0] - line_bbox[0][0])**2 + 
+                                              (line_bbox[3][1] - line_bbox[0][1])**2)
                         
-                        # Calculate font size (slightly smaller than base to ensure fit)
-                        font_size = int(base_font_size * 0.9)
+                        # Calculate font size based on line dimensions
+                        if is_vertical:
+                            font_size = int(line_width * 0.8)  # Use 80% of width for vertical text
+                        else:
+                            font_size = int(line_height * 0.8)  # Use 80% of height for horizontal text
+                        
+                        # Clamp font size
+                        font_size = max(12, min(40, font_size))
+                        
                         try:
                             current_font = ImageFont.truetype(font.path, font_size)
                         except:
                             current_font = ImageFont.load_default()
                         
-                        # Get text dimensions
-                        text = line['text']
-                        bbox = draw.textbbox((0, 0), text, font=current_font)
-                        text_width = float(bbox[2] - bbox[0])
-                        text_height = float(bbox[3] - bbox[1])
-                        
-                        # Calculate center of bounding box
-                        center_x = float(sum(p[0] for p in line['bounding_box']) / 4)
-                        center_y = float(sum(p[1] for p in line['bounding_box']) / 4)
+                        # Calculate line center
+                        line_center_x = sum(p[0] for p in line_bbox) / 4
+                        line_center_y = sum(p[1] for p in line_bbox) / 4
                         
                         # Create temporary image for rotated text
-                        max_dim = max(text_width, text_height) * 2
-                        txt = Image.new('RGBA', (int(max_dim), int(max_dim)), (0, 0, 0, 0))
+                        text = line['text']
+                        bbox = draw.textbbox((0, 0), text, font=current_font)
+                        text_width = bbox[2] - bbox[0]
+                        text_height = bbox[3] - bbox[1]
+                        
+                        # Make temporary image large enough for rotation
+                        max_dim = int(max(text_width, text_height) * 1.5)
+                        txt = Image.new('RGBA', (max_dim, max_dim), (0, 0, 0, 0))
                         txt_draw = ImageDraw.Draw(txt)
                         
                         # Draw text centered in temporary image
                         txt_draw.text(
-                            (txt.width/2, txt.height/2),
+                            (max_dim/2, max_dim/2),
                             text,
                             font=current_font,
                             fill=(255, 255, 255, 255),
                             anchor="mm"
                         )
                         
-                        # Rotate text
-                        txt = txt.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+                        # Rotate text using block angle
+                        if block_angle < 0 :
+                            txt = txt.rotate(-block_angle, expand=True, resample=Image.Resampling.BICUBIC)
+                        else:
+                            txt = txt.rotate(block_angle, expand=True, resample=Image.Resampling.BICUBIC)
                         
                         # Calculate paste position
-                        paste_x = int(center_x - txt.width/2)
-                        paste_y = int(center_y - txt.height/2)
+                        paste_x = int(line_center_x - txt.width/2)
+                        paste_y = int(line_center_y - txt.height/2)
                         
                         # Draw rotated text background
                         bg_txt = Image.new('RGBA', txt.size, (0, 0, 0, 200))
