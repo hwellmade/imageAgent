@@ -550,8 +550,16 @@ class OCRService:
                 except Exception as e:
                     logger.warning(f"[OCR Service] Failed to clean up temporary file: {str(e)}")
 
-    def _draw_text_overlay_by_line(self, image_path: str, texts: list, output_path: str) -> None:
-        """Draw detected text by lines while respecting block boundaries."""
+    def _draw_text_overlay_by_line(self, image_path: str, texts: list, output_path: str, use_translated_text: bool = True) -> None:
+        """
+        Draw detected text by lines while respecting block boundaries.
+        
+        Args:
+            image_path: Path to the original image
+            texts: List of text blocks with coordinates and text content
+            output_path: Path to save the overlay image
+            use_translated_text: If True, use translated text; if False, use original text
+        """
         try:
             # Open the image
             with Image.open(image_path) as image:
@@ -559,23 +567,23 @@ class OCRService:
                 overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
                 draw = ImageDraw.Draw(overlay)
                 
-                # Try to load Japanese font
-                try:
-                    font = ImageFont.truetype("msgothic.ttc", 1)  # Load with size 1 first
-                except:
-                    try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 1)
-                    except:
-                        font = ImageFont.load_default()
+                image_width, image_height = image.size
+                
+                # Function to convert percentage coordinates to absolute pixels
+                def percentage_to_pixels(coords):
+                    """Convert percentage coordinates to absolute pixel coordinates."""
+                    return [
+                        [int(x * image_width / 100), int(y * image_height / 100)]
+                        for x, y in coords
+                    ]
                 
                 # Group lines by their parent block
                 block_lines = {}
                 for text_item in texts:
-                    # Convert coordinates to float
-                    text_item['block_bbox'] = [[float(x), float(y)] for x, y in text_item['block_bbox']]
-                    text_item['bounding_box'] = [[float(x), float(y)] for x, y in text_item['bounding_box']]
+                    # Convert percentage coordinates to pixels
+                    text_item['coordinates'] = percentage_to_pixels(text_item['coordinates'])
                     
-                    block_key = str(text_item['block_bbox'])  # Use block bbox as key
+                    block_key = str(text_item['coordinates'])
                     if block_key not in block_lines:
                         block_lines[block_key] = []
                     block_lines[block_key].append(text_item)
@@ -583,7 +591,7 @@ class OCRService:
                 # Process each block
                 for block_key, lines in block_lines.items():
                     # Draw block background
-                    block_bbox = lines[0]['block_bbox']  # All lines in this group share the same block_bbox
+                    block_bbox = lines[0]['coordinates']
                     draw.polygon([(x, y) for x, y in block_bbox], fill=(0, 0, 0, 160))
                     draw.polygon([(x, y) for x, y in block_bbox], outline=(65, 105, 225), width=1)
                     
@@ -599,30 +607,34 @@ class OCRService:
                     
                     # Process each line in the block
                     for line in lines:
-                        # Get line bounding box
-                        line_bbox = line['bounding_box']
-                        text = line['text']
+                        # Get line bounding box and text
+                        line_bbox = line['coordinates']
+                        text = line['translated_text'] if use_translated_text else line['original_text']
                         
                         # Calculate font size based on line dimensions
                         font_size = self._calculate_line_font_size(line_bbox, text, is_vertical)
                         
+                        # Try to load font with calculated size
                         try:
-                            current_font = ImageFont.truetype(font.path, font_size)
+                            current_font = ImageFont.truetype("msgothic.ttc", font_size)
                         except:
-                            current_font = ImageFont.load_default()
+                            try:
+                                current_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+                            except:
+                                current_font = ImageFont.load_default()
                         
                         # Calculate line center
-                        line_center_x = sum(p[0] for p in line_bbox) / 4
-                        line_center_y = sum(p[1] for p in line_bbox) / 4
+                        line_center_x = sum(p[0] for p in line_bbox) / len(line_bbox)
+                        line_center_y = sum(p[1] for p in line_bbox) / len(line_bbox)
                         
                         # Get text dimensions
                         bbox = draw.textbbox((0, 0), text, font=current_font)
                         text_width = bbox[2] - bbox[0]
                         text_height = bbox[3] - bbox[1]
                         
-                        # Calculate temporary image size (more precise)
+                        # Calculate temporary image size
                         if is_vertical:
-                            temp_width = int(text_height * 1.2)  # More space for vertical text
+                            temp_width = int(text_height * 1.2)
                             temp_height = int(text_width * 1.2)
                         else:
                             temp_width = int(text_width * 1.2)
@@ -642,12 +654,10 @@ class OCRService:
                         )
                         
                         # Rotate text using block angle
-                        if block_angle < 0 :
-                            txt = txt.rotate(-block_angle, expand=True, resample=Image.Resampling.BICUBIC)
-                        else:
+                        if block_angle != 0:
                             txt = txt.rotate(block_angle, expand=True, resample=Image.Resampling.BICUBIC)
                         
-                        # Calculate paste position (adjusted to better fit within bounds)
+                        # Calculate paste position
                         paste_x = int(line_center_x - txt.width/2)
                         paste_y = int(line_center_y - txt.height/2)
                         
@@ -665,7 +675,7 @@ class OCRService:
                 result = result.convert('RGB')
                 result.save(output_path, quality=95)
                 
-                logger.info(f"[OCR Service] Saved line-level overlay visualization to: {output_path}")
+                logger.info(f"[OCR Service] Saved {'translated' if use_translated_text else 'original'} overlay to: {output_path}")
         except Exception as e:
             logger.error(f"[OCR Service] Error in drawing overlay: {str(e)}")
             raise

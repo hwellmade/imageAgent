@@ -1,0 +1,293 @@
+{
+  "original_language": "ja",
+  "target_language": "en",
+  "metadata": {
+    "image_orientation": "horizontal",
+    "total_paragraphs": 6,
+    "total_lines": 20
+  },
+  "paragraphs": [
+    {
+      "id": 1,
+      "coordinates": [
+        7.17,
+        13.67,
+        27.07,
+        20.93
+      ],
+      "orientation": "horizontal",
+      "lines": [
+        {
+          "coordinates": [
+            7.17,
+            13.67,
+            26.53,
+            15.56
+          ],
+          "original_text": "販売名 アトリックス",
+          "translated_text": "Product name Atrix"
+        },
+        {
+          "coordinates": [
+            7.17,
+            18.7,
+            27.07,
+            20.93
+          ],
+          "original_text": "プレミアムハンドクリームBa",
+          "translated_text": "Premium hand cream Ba"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "coordinates": [
+        7.17,
+        23.59,
+        32.14,
+        34.61
+      ],
+      "orientation": "horizontal",
+      "lines": [
+        {
+          "coordinates": [
+            7.17,
+            23.59,
+            32.14,
+            25.66
+          ],
+          "original_text": "贅沢保湿で美肌へ",
+          "translated_text": "To beautiful skin with luxurious moisturizing"
+        },
+        {
+          "coordinates": [
+            7.17,
+            26.53,
+            32.14,
+            29.04
+          ],
+          "original_text": "エイジングケア*ハンドクリーム",
+          "translated_text": "Aging care * hand cream"
+        },
+        {
+          "coordinates": [
+            7.17,
+            30.05,
+            32.14,
+            32.35
+          ],
+          "original_text": "小じわをカバーしてパッと明るい*2",
+          "translated_text": "Cover fine lines and brighten instantly * 2"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "coordinates": [
+        7.17,
+        36.95,
+        31.07,
+        51.59
+      ],
+      "orientation": "horizontal",
+      "lines": [
+        {
+          "coordinates": [
+            7.17,
+            36.95,
+            31.07,
+            38.65
+          ],
+          "original_text": "瞬感つや美肌へ",
+          "translated_text": "To instantly beautiful skin"
+        },
+        {
+          "coordinates": [
+            7.17,
+            39.5,
+            31.07,
+            41.39
+          ],
+          "original_text": "サクラモイスチャーα*3 配合(保湿成分)",
+          "translated_text": "Sakura Moisture α * 3 (moisturizing ingredient)"
+        },
+        {
+          "coordinates": [
+            7.17,
+            42.28,
+            31.07,
+            43.98
+          ],
+          "original_text": "SPF20 PA+",
+          "translated_text": "SPF20 PA +"
+        },
+        {
+          "coordinates": [
+            7.17,
+            45.06,
+            31.07,
+            47.77
+          ],
+          "original_text": "コエンザイムQ10 (ユビキノン) 配合(保湿成分)",
+          "translated_text": "Coenzyme Q10 (Ubiquinone) contains (moisturizing ingredient)"
+        },
+        {
+          "coordinates": [
+            7.17,
+            48.64,
+            31.07,
+            50.34
+          ],
+          "original_text": "*1 年齢に応じたお手入れ",
+          "translated_text": "* 1 Care according to age"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "coordinates": [
+        36.39,
+        36.95,
+        67.61,
+        88.45
+      ],
+      "orientation": "horizontal",
+      "lines": [
+        {
+          "coordinates": [
+            36.39,
+            36.95,
+            65.95,
+            38.65
+          ],
+          "original_text": "*2 光拡散ヴェールによるメーキャップ効果",
+          "translated_text": "* 2 Makeup effect with light diffusion veil"
+        },
+        {
+          "coordinates": [
+            36.39,
+            39.5,
+            67.61,
+            41.19
+          ],
+          "original_text": "*3 ソメイヨシノ葉エキス、コラーゲン、ヒアルロン酸、グリセリン",
+          "translated_text": "* 3 Someiyoshino leaf extract, collagen, hyaluronic acid, glycerin"
+        },
+        {
+          "coordinates": [
+            36.39,
+            45.62,
+            67.61,
+            47.32
+          ],
+          "original_text": "使い方 適量を手・指先などにお使いください。",
+          "translated_text": "How to use Apply an appropriate amount to your hands and fingers."
+        },
+        {
+          "coordinates": [
+            36.39,
+            50.13,
+            67.61,
+            88.45
+          ],
+          "original_text": "ご注意 ●傷、はれもの、湿疹等異常のあるところには使わない。●肌に異常が生じていないかよく注意して使う。肌に合わない時、使用中、赤み、はれ、かゆみ、刺激、色抜け(白斑等)や黒ずみ等の異常が出た時、また日光があたって同じような異常が出た時は使用を中止し、皮フ科医へ相談する。使い続けると症状が悪化することがある。●子供や認知症の方などの誤食等を防ぐため、置き場所にご注意する。",
+          "translated_text": "Caution ● Do not use on areas with wounds, swelling, eczema, or other abnormalities. ● Be careful not to develop any skin abnormalities. If it does not suit your skin, or if any abnormalities such as redness, swelling, itching, irritation, discoloration (white spots, etc.) or darkening appear during use, or if similar abnormalities appear after exposure to sunlight, discontinue use and consult a dermatologist. Continued use may worsen symptoms. ● To prevent accidental ingestion by children and people with dementia, please be careful where you place the product."
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "coordinates": [
+        70.98,
+        45.62,
+        75.85,
+        47.32
+      ],
+      "orientation": "horizontal",
+      "lines": [
+        {
+          "coordinates": [
+            70.98,
+            45.62,
+            75.85,
+            47.32
+          ],
+          "original_text": "60g",
+          "translated_text": "60g"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "coordinates": [
+        76.58,
+        37.47,
+        92.85,
+        82.14
+      ],
+      "orientation": "horizontal",
+      "lines": [
+        {
+          "coordinates": [
+            76.58,
+            37.47,
+            92.85,
+            41.39
+          ],
+          "original_text": "ニベア花王株式会社",
+          "translated_text": "Nivea Kao Co., Ltd."
+        },
+        {
+          "coordinates": [
+            76.58,
+            41.91,
+            92.85,
+            47.77
+          ],
+          "original_text": "〒103-8210 日本橋茅場町1-14-10",
+          "translated_text": "〒103-8210 1-14-10 Nihonbashi Kayabacho, Japan"
+        },
+        {
+          "coordinates": [
+            76.58,
+            48.64,
+            92.85,
+            50.34
+          ],
+          "original_text": "東京中央区",
+          "translated_text": "Tokyo Chuo-ku"
+        },
+        {
+          "coordinates": [
+            76.58,
+            51.23,
+            92.85,
+            53.74
+          ],
+          "original_text": "お客様相談室 0120-165-699",
+          "translated_text": "Customer Consultation Room 0120-165-699"
+        },
+        {
+          "coordinates": [
+            76.58,
+            54.68,
+            92.85,
+            58.49
+          ],
+          "original_text": "Biersdorf ドイツ バイヤスドルフ社の商標",
+          "translated_text": "Biersdorf Trademark of Bayerasdorf, Germany"
+        },
+        {
+          "coordinates": [
+            76.58,
+            80.1,
+            92.85,
+            82.14
+          ],
+          "original_text": "Made in Japan",
+          "translated_text": "Made in Japan"
+        }
+      ]
+    }
+  ]
+}

@@ -9,6 +9,26 @@ interface TextDetection {
   translated_text?: string;
 }
 
+interface AnalysisResult {
+  original_language: string;
+  target_language: string;
+  metadata: {
+    image_orientation: string;
+    total_paragraphs: number;
+    total_lines: number;
+  };
+  paragraphs: Array<{
+    id: number;
+    coordinates: number[];
+    orientation: string;
+    lines: Array<{
+      coordinates: number[];
+      original_text: string;
+      translated_text: string;
+    }>;
+  }>;
+}
+
 // Define backend URL based on environment
 const BACKEND_URL = process.env.NODE_ENV === 'production' 
   ? '/api'  // In production, use relative path
@@ -149,6 +169,11 @@ function App() {
         try {
           await loadImage(overlayUrl);
           console.log(`[Timing] Overlay image loaded in ${(performance.now() - overlayStartTime).toFixed(2)}ms`);
+          
+          // Store analysis result if needed
+          if (data.analysis_result) {
+            setDetectedTexts(data.analysis_result);
+          }
         } catch (error) {
           console.error('Error loading overlay:', error);
           setError('Failed to load overlay image. Please try again.');
@@ -216,7 +241,72 @@ function App() {
       const blob = await response.blob()
       console.log(`[Timing] Blob conversion took ${(performance.now() - blobStartTime).toFixed(2)}ms`);
       
-      await processImageForOCR(blob)
+      // Create form data
+      const formData = new FormData();
+      formData.append('file', blob, `image_${Date.now()}.jpg`);
+      formData.append('target_lang', targetLanguage);  // Use selected target language
+      
+      // Send request to backend
+      const apiResponse = await fetch(`${BACKEND_URL}/ocr`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!apiResponse.ok) {
+        throw new Error(`API request failed: ${apiResponse.statusText}`);
+      }
+
+      const data = await apiResponse.json();
+      
+      if (data.overlay_image) {
+        const overlayUrl = process.env.NODE_ENV === 'production'
+          ? data.overlay_image
+          : `http://${window.location.hostname}:8000${data.overlay_image}`;
+        
+        console.log('[Timing] Starting overlay image loading...');
+        const overlayStartTime = performance.now();
+        
+        // Preload image with timeout
+        const loadImage = async (url: string, timeout: number = 10000): Promise<void> => {
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            const timeoutId = setTimeout(() => {
+              reject(new Error('Image loading timed out'));
+            }, timeout);
+            
+            img.onload = () => {
+              clearTimeout(timeoutId);
+              setOverlayImage(url);
+              setShowOverlay(true);
+              resolve();
+            };
+            
+            img.onerror = () => {
+              clearTimeout(timeoutId);
+              reject(new Error('Failed to load image'));
+            };
+            
+            img.src = url;
+          });
+        };
+
+        try {
+          await loadImage(overlayUrl);
+          console.log(`[Timing] Overlay image loaded in ${(performance.now() - overlayStartTime).toFixed(2)}ms`);
+          
+          // Store analysis result if needed
+          if (data.analysis_result) {
+            setDetectedTexts(data.analysis_result);
+          }
+        } catch (error) {
+          console.error('Error loading overlay:', error);
+          setError('Failed to load overlay image. Please try again.');
+        }
+      } else {
+        console.log('No overlay image in response');
+        setOverlayImage(null);
+        setShowOverlay(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process image')
     } finally {
@@ -366,35 +456,35 @@ function App() {
                       className="w-full h-full object-cover"
                     />
                   ) : selectedImage ? (
-                    // Image view
+                    // Image view with overlay
                     <div className="relative w-full h-full">
                       <div 
                         className="w-full h-full cursor-pointer"
                         onDoubleClick={() => {
                           if (overlayImage) {
                             setShowOverlay(!showOverlay);
-                            console.log('Toggling overlay via double-click:', !showOverlay);
+                            console.log('Toggling overlay:', !showOverlay, 'Mode:', showOverlay ? 'Original' : 'Translated');
                           }
                         }}
                         onTouchStart={(e) => {
                           const now = Date.now();
                           const timeDiff = now - lastTapRef.current;
                           
-                          if (timeDiff < 300 && overlayImage) { // Double tap detected
+                          if (timeDiff < 300 && overlayImage) {
                             e.preventDefault();
                             e.stopPropagation();
                             setShowOverlay(!showOverlay);
-                            console.log('Toggling overlay via double tap:', !showOverlay);
-                            lastTapRef.current = 0; // Reset to prevent triple-tap
+                            console.log('Toggling overlay:', !showOverlay, 'Mode:', showOverlay ? 'Original' : 'Translated');
+                            lastTapRef.current = 0;
                           } else {
                             lastTapRef.current = now;
                           }
                         }}
-                        title="Double-click/tap or use toggle button to switch views"
+                        title="Double-click/tap to toggle between original and translated view"
                       >
                         <img
                           src={showOverlay ? overlayImage || selectedImage : selectedImage}
-                          alt="Selected"
+                          alt={showOverlay ? "Translated View" : "Original View"}
                           className="w-full h-full object-contain"
                           style={{ touchAction: 'manipulation' }}
                         />
@@ -402,16 +492,16 @@ function App() {
                       {overlayImage && (
                         <>
                           <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm">
-                            {showOverlay ? 'Translated View' : 'Original View'}
+                            {showOverlay ? 'Translated Text' : 'Original Text'}
                           </div>
-                          {/* Toggle button for mobile */}
+                          {/* Toggle button */}
                           <button
                             onClick={() => {
                               setShowOverlay(!showOverlay);
-                              console.log('Toggling overlay via button:', !showOverlay);
+                              console.log('Toggling overlay:', !showOverlay, 'Mode:', showOverlay ? 'Original' : 'Translated');
                             }}
                             className="absolute top-2 right-2 bg-black bg-opacity-50 text-white p-2 rounded-full hover:bg-opacity-75 transition-opacity"
-                            aria-label="Toggle view"
+                            aria-label="Toggle between original and translated view"
                           >
                             <svg 
                               className="w-6 h-6" 
