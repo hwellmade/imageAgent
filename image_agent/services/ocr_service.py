@@ -187,6 +187,32 @@ class OCRService:
             
         return angle
 
+    def _calculate_line_font_size(self, line_bbox: list, text: str, is_vertical: bool) -> int:
+        """Calculate appropriate font size for a line to fit within its bounding box."""
+        # Calculate actual box dimensions
+        width = math.sqrt((line_bbox[1][0] - line_bbox[0][0])**2 + 
+                         (line_bbox[1][1] - line_bbox[0][1])**2)
+        height = math.sqrt((line_bbox[3][0] - line_bbox[0][0])**2 + 
+                          (line_bbox[3][1] - line_bbox[0][1])**2)
+        
+        # Use a more conservative space calculation
+        if is_vertical:
+            # For vertical text, use width as the constraint
+            available_space = width * 0.7  # Use 70% of width
+            text_space_needed = height / (len(text) + 1)  # Add 1 for spacing
+        else:
+            # For horizontal text, use height as the constraint
+            available_space = height * 0.7  # Use 70% of height
+            # Estimate characters per line based on width/height ratio
+            chars_per_line = max(1, min(len(text), width / height * 1.5))
+            text_space_needed = width / chars_per_line
+        
+        # Calculate base size
+        base_size = min(available_space, text_space_needed)
+        
+        # More conservative font size limits
+        return int(max(10, min(32, base_size)))
+
     def _draw_text_overlay(self, image_path: str, texts: list, output_path: str | None = None) -> str:
         """Draw detected text and bounding boxes on the image."""
         start_time = datetime.now()
@@ -563,12 +589,10 @@ class OCRService:
                     
                     # Calculate block dimensions and angle
                     block_angle = self._calculate_block_angle(block_bbox)
-                    block_min_x = min(p[0] for p in block_bbox)
-                    block_max_x = max(p[0] for p in block_bbox)
-                    block_min_y = min(p[1] for p in block_bbox)
-                    block_max_y = max(p[1] for p in block_bbox)
-                    block_width = block_max_x - block_min_x
-                    block_height = block_max_y - block_min_y
+                    block_width = math.sqrt((block_bbox[1][0] - block_bbox[0][0])**2 + 
+                                          (block_bbox[1][1] - block_bbox[0][1])**2)
+                    block_height = math.sqrt((block_bbox[3][0] - block_bbox[0][0])**2 + 
+                                           (block_bbox[3][1] - block_bbox[0][1])**2)
                     
                     # Determine if block is vertical
                     is_vertical = block_height > block_width * 1.2
@@ -577,21 +601,10 @@ class OCRService:
                     for line in lines:
                         # Get line bounding box
                         line_bbox = line['bounding_box']
-                        
-                        # Calculate line dimensions
-                        line_width = math.sqrt((line_bbox[1][0] - line_bbox[0][0])**2 + 
-                                             (line_bbox[1][1] - line_bbox[0][1])**2)
-                        line_height = math.sqrt((line_bbox[3][0] - line_bbox[0][0])**2 + 
-                                              (line_bbox[3][1] - line_bbox[0][1])**2)
+                        text = line['text']
                         
                         # Calculate font size based on line dimensions
-                        if is_vertical:
-                            font_size = int(line_width * 0.8)  # Use 80% of width for vertical text
-                        else:
-                            font_size = int(line_height * 0.8)  # Use 80% of height for horizontal text
-                        
-                        # Clamp font size
-                        font_size = max(12, min(40, font_size))
+                        font_size = self._calculate_line_font_size(line_bbox, text, is_vertical)
                         
                         try:
                             current_font = ImageFont.truetype(font.path, font_size)
@@ -602,20 +615,26 @@ class OCRService:
                         line_center_x = sum(p[0] for p in line_bbox) / 4
                         line_center_y = sum(p[1] for p in line_bbox) / 4
                         
-                        # Create temporary image for rotated text
-                        text = line['text']
+                        # Get text dimensions
                         bbox = draw.textbbox((0, 0), text, font=current_font)
                         text_width = bbox[2] - bbox[0]
                         text_height = bbox[3] - bbox[1]
                         
-                        # Make temporary image large enough for rotation
-                        max_dim = int(max(text_width, text_height) * 1.5)
-                        txt = Image.new('RGBA', (max_dim, max_dim), (0, 0, 0, 0))
+                        # Calculate temporary image size (more precise)
+                        if is_vertical:
+                            temp_width = int(text_height * 1.2)  # More space for vertical text
+                            temp_height = int(text_width * 1.2)
+                        else:
+                            temp_width = int(text_width * 1.2)
+                            temp_height = int(text_height * 1.2)
+                        
+                        # Create temporary image for rotated text
+                        txt = Image.new('RGBA', (temp_width, temp_height), (0, 0, 0, 0))
                         txt_draw = ImageDraw.Draw(txt)
                         
                         # Draw text centered in temporary image
                         txt_draw.text(
-                            (max_dim/2, max_dim/2),
+                            (temp_width/2, temp_height/2),
                             text,
                             font=current_font,
                             fill=(255, 255, 255, 255),
@@ -628,7 +647,7 @@ class OCRService:
                         else:
                             txt = txt.rotate(block_angle, expand=True, resample=Image.Resampling.BICUBIC)
                         
-                        # Calculate paste position
+                        # Calculate paste position (adjusted to better fit within bounds)
                         paste_x = int(line_center_x - txt.width/2)
                         paste_y = int(line_center_y - txt.height/2)
                         
