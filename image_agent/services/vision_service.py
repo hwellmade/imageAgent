@@ -33,20 +33,11 @@ def create_vision_prompt(target_lang_code: str, target_lang_name: str) -> str:
     """Create a dynamic prompt for vision analysis."""
     return f"""Analyze this image and extract text information with the following requirements:
 
-1. Text Extraction and Layout:
-- Extract all visible text while preserving spatial relationships
-- For each text block/paragraph and line, provide coordinates as relative percentages:
-  * Use format [x1%, y1%, x2%, y2%] where:
-    - (0%, 0%) is the top-left corner of the image
-    - (100%, 100%) is the bottom-right corner of the image
-    - Each coordinate pair (x%, y%) represents a point relative to image dimensions
-  * Example: [10%, 20%, 90%, 30%] means:
-    - Left edge is 10% from left border
-    - Top edge is 20% from top border
-    - Right edge is 90% from left border
-    - Bottom edge is 30% from top border
-- Indicate whether text is vertical or horizontal
-- Preserve text content with original line breaks
+1. Text Structure:
+- Extract all visible text while preserving reading order
+- Group text into logical paragraphs
+- Preserve line breaks within paragraphs
+- Indicate text orientation (vertical/horizontal)
 
 2. Translation:
 - Translate all text to {target_lang_name}
@@ -54,7 +45,11 @@ def create_vision_prompt(target_lang_code: str, target_lang_name: str) -> str:
 - Maintain formatting symbols (●, ・, ※, etc.)
 - Use {target_lang_code} for proper character encoding
 
-3. Required Output Format (JSON):
+3. Required Output Format (STRICT JSON):
+- Response must be valid JSON with proper comma placement
+- No trailing commas
+- All property names and string values must be in double quotes
+- Commas must be between elements, not after them
 {{
   "original_language": "string",
   "target_language": "{target_lang_code}",
@@ -66,13 +61,12 @@ def create_vision_prompt(target_lang_code: str, target_lang_name: str) -> str:
   "paragraphs": [
     {{
       "id": number,
-      "coordinates": [x1%, y1%, x2%, y2%],  // Relative percentages from top-left
       "orientation": "vertical|horizontal",
       "lines": [
         {{
-          "coordinates": [x1%, y1%, x2%, y2%],  // Relative percentages from top-left
           "original_text": "string",
-          "translated_text": "string"
+          "translated_text": "string",
+          "text_orientation": "vertical|horizontal"
         }}
       ]
     }}
@@ -80,11 +74,11 @@ def create_vision_prompt(target_lang_code: str, target_lang_name: str) -> str:
 }}
 
 Important: 
-- All coordinates must be expressed as percentages relative to image dimensions
-- Use top-left (0%, 0%) as coordinate origin
-- Ensure coordinates are precise for accurate overlay placement
+- Preserve all text content exactly as shown
+- Maintain all formatting and special characters
 - Translate to {target_lang_name} ({target_lang_code})
-- Preserve all formatting and special characters
+- Focus on accurate text extraction and translation
+- Ensure JSON output follows strict formatting rules with proper comma placement
 """
 
 class VisionService:
@@ -136,6 +130,140 @@ class VisionService:
             logger.error(f"Error preparing image: {str(e)}")
             raise
     
+    def _clean_json_response(self, response_text: str) -> str:
+        """Clean and normalize JSON response from LLM output."""
+        try:
+            # Remove markdown code block markers
+            response_text = response_text.strip()
+            if response_text.startswith("```"):
+                # Remove opening ```json or ``` line
+                first_newline = response_text.find('\n')
+                if first_newline != -1:
+                    response_text = response_text[first_newline + 1:]
+                # Remove closing ```
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3]
+            
+            # Strip any remaining whitespace
+            response_text = response_text.strip()
+            
+            def normalize_json_structure(text):
+                """Normalize JSON by parsing and reconstructing problematic parts."""
+                # First pass: fix basic syntax issues
+                text = text.replace('",\n          ,', '",')
+                text = text.replace('",\n        ,', '",')
+                text = text.replace('",\n      ,', '",')
+                
+                try:
+                    # Try to parse as is first
+                    return json.loads(text)
+                except json.JSONDecodeError as e:
+                    # If that fails, try more aggressive normalization
+                    lines = text.split('\n')
+                    normalized_lines = []
+                    in_object = False
+                    previous_line = ""
+                    
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                            
+                        # Handle property names and values
+                        if ':' in line:
+                            key, value = line.split(':', 1)
+                            key = key.strip().strip('"')
+                            value = value.strip()
+                            
+                            # Ensure key is properly quoted
+                            key = f'"{key}"'
+                            
+                            # Handle string values
+                            if value.startswith('"'):
+                                if not value.endswith('"') or value.endswith('",'):
+                                    value = value.rstrip(',') + '"'
+                            
+                            # Reconstruct the line
+                            line = f'{key}: {value}'
+                            
+                            # Add comma if needed
+                            if not line.endswith('}') and not line.endswith(']') and not line.endswith(','):
+                                line += ','
+                                
+                        # Handle object/array boundaries
+                        if '{' in line:
+                            in_object = True
+                        if '}' in line:
+                            in_object = False
+                            # Remove trailing comma before closing brace
+                            if previous_line.endswith(','):
+                                normalized_lines[-1] = normalized_lines[-1].rstrip(',')
+                        
+                        normalized_lines.append(line)
+                        previous_line = line
+                    
+                    # Join lines and try to parse again
+                    normalized_json = '\n'.join(normalized_lines)
+                    try:
+                        return json.loads(normalized_json)
+                    except json.JSONDecodeError:
+                        # If still failing, try one more time with even more aggressive cleaning
+                        normalized_json = normalized_json.replace(',,', ',')
+                        normalized_json = normalized_json.replace(',}', '}')
+                        normalized_json = normalized_json.replace(',]', ']')
+                        return json.loads(normalized_json)
+            
+            # Normalize and validate JSON structure
+            normalized_data = normalize_json_structure(response_text)
+            
+            # Convert back to formatted string
+            return json.dumps(normalized_data, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            logger.error(f"Error cleaning JSON response: {str(e)}", exc_info=True)
+            raise
+
+    def _validate_json_response(self, result: Dict[str, Any]) -> bool:
+        """Validate the JSON response has all required fields."""
+        required_fields = [
+            'original_language',
+            'target_language',
+            'metadata',
+            'paragraphs'
+        ]
+        
+        metadata_fields = [
+            'image_orientation',
+            'total_paragraphs',
+            'total_lines'
+        ]
+        
+        # Check top-level fields
+        for field in required_fields:
+            if field not in result:
+                logger.error(f"Missing required field: {field}")
+                return False
+        
+        # Check metadata fields
+        for field in metadata_fields:
+            if field not in result['metadata']:
+                logger.error(f"Missing metadata field: {field}")
+                return False
+        
+        # Check paragraphs structure
+        for i, para in enumerate(result['paragraphs']):
+            if 'id' not in para or 'lines' not in para:
+                logger.error(f"Invalid paragraph structure at index {i}")
+                return False
+            
+            # Check lines structure
+            for j, line in enumerate(para['lines']):
+                if 'original_text' not in line or 'translated_text' not in line:
+                    logger.error(f"Invalid line structure at paragraph {i}, line {j}")
+                    return False
+        
+        return True
+
     async def analyze_image(
         self,
         image_path: str,
@@ -168,17 +296,41 @@ class VisionService:
             response = self.model.generate_content([prompt, image])
             response.resolve()  # Wait for completion
             
-            # Parse response
+            # Clean and parse response
             try:
-                result = json.loads(response.text)
-                logger.info("Successfully parsed API response")
-                return result
-            except json.JSONDecodeError:
-                logger.error("Failed to parse API response as JSON")
-                raise ValueError("Invalid response format from API")
+                # Get raw response text
+                response_text = response.text.strip()
+                logger.debug(f"Raw response: {response_text}")
+                
+                # Clean JSON response
+                json_text = self._clean_json_response(response_text)
+                logger.debug(f"Cleaned JSON text: {json_text}")
+                
+                try:
+                    result = json.loads(json_text)
+                    logger.info("Successfully parsed API response")
+                    
+                    # Validate response structure
+                    if not self._validate_json_response(result):
+                        raise ValueError("Invalid response structure")
+                    
+                    return result
+                    
+                except json.JSONDecodeError as je:
+                    logger.error(f"JSON parsing error: {str(je)}")
+                    logger.error(f"Position: char {je.pos}")
+                    logger.error(f"Line number: {je.lineno}")
+                    logger.error(f"Column number: {je.colno}")
+                    logger.error(f"Attempted to parse: {json_text}")
+                    raise ValueError(f"Invalid JSON format in API response: {str(je)}")
+                    
+            except Exception as parse_error:
+                logger.error(f"Error parsing response: {str(parse_error)}")
+                logger.error(f"Raw response was: {response_text}")
+                raise ValueError(f"Failed to parse API response: {str(parse_error)}")
             
         except Exception as e:
-            logger.error(f"Error analyzing image: {str(e)}")
+            logger.error(f"Error analyzing image: {str(e)}", exc_info=True)
             raise
 
 # Create singleton instance
