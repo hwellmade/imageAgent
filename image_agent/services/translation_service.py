@@ -30,6 +30,7 @@ class TranslationService:
                            source_lang: OptionalType[str] = None) -> List[Dict[str, str]]:
         """
         Translate a list of texts to the target language.
+        Handles API limitations by batching requests.
         
         Args:
             texts: List of texts to translate
@@ -49,28 +50,39 @@ class TranslationService:
             if not texts:
                 return []
             
-            # Batch translate all texts in a single API call
-            results = self._client.translate(
-                texts,
-                target_language=target_lang,
-                source_language=source_lang
-            )
+            # Constants
+            BATCH_SIZE = 128  # Google Translation API limit
             
-            # Process results
-            translations = []
-            for text, result in zip(texts, results):
-                translations.append({
-                    'original_text': text,
-                    'translated_text': result['translatedText'],
-                    'detected_source_language': result.get('detectedSourceLanguage', source_lang or 'unknown'),
-                    'target_language': target_lang
-                })
+            # Process in batches
+            all_translations = []
+            for i in range(0, len(texts), BATCH_SIZE):
+                batch = texts[i:i + BATCH_SIZE]
+                
+                # Translate batch
+                results = self._client.translate(
+                    batch,
+                    target_language=target_lang,
+                    source_language=source_lang
+                )
+                
+                # Process batch results
+                for text, result in zip(batch, results):
+                    all_translations.append({
+                        'original_text': text,
+                        'translated_text': result['translatedText'],
+                        'detected_source_language': result.get('detectedSourceLanguage', source_lang or 'unknown'),
+                        'target_language': target_lang
+                    })
+                
+                # Log batch statistics
+                char_count = sum(len(text) for text in batch)
+                logger.info(f"Translated batch of {len(batch)} texts ({char_count} characters)")
             
-            # Log translation statistics
-            char_count = sum(len(text) for text in texts)
-            logger.info(f"Translated {len(texts)} texts ({char_count} characters) in one API call")
+            # Log overall statistics
+            total_char_count = sum(len(text) for text in texts)
+            logger.info(f"Completed translation of {len(texts)} texts ({total_char_count} characters) in {len(texts) // BATCH_SIZE + 1} API calls")
             
-            return translations
+            return all_translations
             
         except Exception as e:
             logger.error(f"Translation failed: {str(e)}")

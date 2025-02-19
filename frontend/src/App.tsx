@@ -507,7 +507,7 @@ function App() {
                     Please take or upload an image to translate
                   </div>
                 )}
-              </div>
+      </div>
 
               {/* AI Assistants Area */}
               <div className="pt-8">
@@ -535,7 +535,7 @@ function App() {
                     className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg transition-colors"
                   >
                     Custom
-                  </button>
+        </button>
                 </div>
               </div>
             </div>

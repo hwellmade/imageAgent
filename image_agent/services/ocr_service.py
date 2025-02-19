@@ -89,11 +89,13 @@ class OCRService:
         height = math.sqrt((x3 - x1)**2 + (y3 - y1)**2)
         
         # Determine if text is more horizontal or vertical based on aspect ratio
-        is_vertical = height > width
+        is_vertical = height > width * 1.2
         
         if is_vertical:
             # For vertical text, use the left edge (points[0] to points[3])
             angle = math.degrees(math.atan2(y3 - y1, x3 - x1))
+            # Add 90 degrees for vertical text
+            angle += 90
         else:
             # For horizontal text, use the bottom edge (points[0] to points[1])
             angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
@@ -103,27 +105,9 @@ class OCRService:
             angle -= 180
         while angle < -90:
             angle += 180
-        
-        # For vertical text, we need to add 90 degrees first
-        if is_vertical:
-            angle += 90
-            # Normalize again after adding 90
-            while angle > 90:
-                angle -= 180
-            while angle < -90:
-                angle += 180
-        
-        # Now flip the angle 180 degrees if it's in the wrong direction
-        if (is_vertical and angle < 0) or (not is_vertical and angle > 0):
-            angle += 180
-        else:
-            angle -= 180
-        
-        # Final normalization
-        while angle > 90:
-            angle -= 180
-        while angle < -90:
-            angle += 180
+            
+        # Reverse the angle to match the correct rotation direction
+        angle = -angle
             
         return angle
 
@@ -145,23 +129,57 @@ class OCRService:
 
     def _calculate_uniform_font_size(self, texts: list, image_height: int) -> int:
         """Calculate a uniform font size based on the average text block height."""
-        # Get average height of text blocks
+        # Get heights of text blocks
         heights = []
         for text in texts:
             vertices = text.bounding_poly.vertices
             points = [(vertex.x, vertex.y) for vertex in vertices]
-            height = math.sqrt((points[3][0] - points[0][0])**2 + (points[3][1] - points[0][1])**2)
+            height = max(p[1] for p in points) - min(p[1] for p in points)
             heights.append(height)
+        
+        if not heights:
+            return 10  # Default minimum font size
         
         # Use median height to avoid outliers
         median_height = sorted(heights)[len(heights)//2]
         
-        # Scale font size relative to image height (adjust these values as needed)
+        # Scale font size relative to image height (further reduced scaling factors)
         relative_size = median_height / image_height
-        base_font_size = int(relative_size * 40)  # 40 is a scaling factor
-        
+        base_font_size = int(relative_size * 12)  # Reduced from 20 to 12
+        breakpoint()
         # Clamp to reasonable limits
-        return max(16, min(32, base_font_size))
+        return max(6, min(10, base_font_size))  # Reduced from (8, 16) to (6, 10)
+
+    def _calculate_box_angle(self, points: list) -> float:
+        """Calculate the angle of the bounding box."""
+        # Get the points
+        x1, y1 = points[0]  # bottom-left
+        x2, y2 = points[1]  # bottom-right
+        x3, y3 = points[2]  # top-right
+        
+        # Calculate width and height
+        width = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        height = math.sqrt((x3 - x2)**2 + (y3 - y2)**2)
+        
+        # Determine if text is vertical based on aspect ratio
+        is_vertical = height > width * 1.2
+        
+        if is_vertical:
+            # For vertical text, use the right edge
+            angle = math.degrees(math.atan2(y3 - y2, x3 - x2))
+            # Add 90 degrees for vertical text
+            angle += 90
+        else:
+            # For horizontal text, use the bottom edge
+            angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+            
+        # Normalize angle to be between -90 and 90 degrees
+        while angle > 90:
+            angle -= 180
+        while angle < -90:
+            angle += 180
+            
+        return angle
 
     def _draw_text_overlay(self, image_path: str, texts: list, output_path: str | None = None) -> str:
         """Draw detected text and bounding boxes on the image."""
@@ -209,7 +227,7 @@ class OCRService:
         
         # Process each text block
         for text in texts[1:]:  # Skip the first text as it contains all text
-            vertices = text.bounding_poly.vertices
+            vertices = text.bounding_box.vertices
             points = [(vertex.x, vertex.y) for vertex in vertices]
             
             # Draw semi-transparent background
@@ -310,65 +328,170 @@ class OCRService:
                          file: Any,
                          source_lang: str = 'auto',
                          saved_file_path: str | None = None) -> tuple[list[dict], str | None]:
-        """Detect text in the image using Google Cloud Vision with caching."""
+        """Detect text in the image using Google Cloud Vision with hierarchical text detection."""
         start_time = datetime.now()
         logger.info(f"[OCR Service] Starting text detection at {start_time.strftime('%H:%M:%S.%f')}")
+        
+        image_content = None
+        temp_file = None
         
         try:
             # Read and hash image content
             read_start = datetime.now()
             if hasattr(file, 'read'):
-                contents = await file.read()
+                image_content = await file.read()
             else:
                 with open(saved_file_path, 'rb') as f:
-                    contents = f.read()
+                    image_content = f.read()
             
-            image_hash = self._get_image_hash(contents)
+            image_hash = self._get_image_hash(image_content)
             
             # Check cache for existing results
             if image_hash in self._ocr_cache:
                 logger.info("[OCR Service] Using cached OCR results")
                 return self._ocr_cache[image_hash]
             
+            # Create a temporary file for the optimized image
+            temp_file = self._get_temp_path("temp_image.jpg")
+            
             # Optimize image before OCR
-            image = Image.open(io.BytesIO(contents))
-            optimized_image = self._optimize_image(image)
-            optimized_contents = io.BytesIO()
-            optimized_image.save(optimized_contents, format='JPEG', quality=85)
-            optimized_contents = optimized_contents.getvalue()
+            with Image.open(io.BytesIO(image_content)) as image:
+                optimized_image = self._optimize_image(image)
+                # Save optimized image to temporary file
+                optimized_image.save(temp_file, format='JPEG', quality=85)
+                
+                # Read the optimized image for OCR
+                with open(temp_file, 'rb') as f:
+                    optimized_contents = f.read()
             
-            # Perform OCR with optimized image
+            # Perform OCR with optimized image using document text detection
             vision_image = vision.Image(content=optimized_contents)
-            response = self._client.text_detection(image=vision_image)
-            texts = response.text_annotations
+            response = self._client.document_text_detection(
+                image=vision_image,
+                image_context={"language_hints": [source_lang] if source_lang != 'auto' else []}
+            )
+            document = response.full_text_annotation
             
-            if not texts:
+            if not document.text:
                 return [], None
                 
+            # Extract text with hierarchical structure
+            detected_texts = []
+            
+            # Process each page (usually just one)
+            for page in document.pages:
+                # Process each block
+                for block in page.blocks:
+                    # Get block bounding box
+                    if block.bounding_box:
+                        block_bbox = [[vertex.x, vertex.y] 
+                                    for vertex in block.bounding_box.vertices]
+                        
+                        # Store lines for this block
+                        block_lines = []
+                        current_line = {
+                            'words': [],
+                            'bbox': None,
+                            'text': '',
+                            'confidence': 0.0
+                        }
+                        
+                        # Process each paragraph
+                        for paragraph in block.paragraphs:
+                            last_word_y = None
+                            
+                            # Process each word
+                            for word in paragraph.words:
+                                if word.bounding_box:
+                                    word_bbox = [[vertex.x, vertex.y] 
+                                               for vertex in word.bounding_box.vertices]
+                                    word_text = ''.join([symbol.text for symbol in word.symbols])
+                                    word_confidence = word.confidence
+                                    
+                                    # Calculate word's center y-coordinate
+                                    word_y = sum(p[1] for p in word_bbox) / len(word_bbox)
+                                    
+                                    # If this is a new line (based on y-position difference)
+                                    if last_word_y is not None and abs(word_y - last_word_y) > (word_bbox[3][1] - word_bbox[0][1]) * 0.5:
+                                        # Save current line
+                                        if current_line['words']:
+                                            block_lines.append(current_line)
+                                            current_line = {
+                                                'words': [],
+                                                'bbox': None,
+                                                'text': '',
+                                                'confidence': 0.0
+                                            }
+                                    
+                                    # Add word to current line
+                                    current_line['words'].append({
+                                        'text': word_text,
+                                        'bbox': word_bbox,
+                                        'confidence': word_confidence
+                                    })
+                                    last_word_y = word_y
+                        
+                        # Add last line if not empty
+                        if current_line['words']:
+                            block_lines.append(current_line)
+                        
+                        # Process each line in the block
+                        for line in block_lines:
+                            # Calculate line bounding box
+                            if line['words']:
+                                all_points = [p for word in line['words'] for p in word['bbox']]
+                                min_x = min(p[0] for p in all_points)
+                                max_x = max(p[0] for p in all_points)
+                                min_y = min(p[1] for p in all_points)
+                                max_y = max(p[1] for p in all_points)
+                                line['bbox'] = [
+                                    [min_x, max_y],  # bottom-left
+                                    [max_x, max_y],  # bottom-right
+                                    [max_x, min_y],  # top-right
+                                    [min_x, min_y]   # top-left
+                                ]
+                                line['text'] = ' '.join(word['text'] for word in line['words'])
+                                line['confidence'] = sum(word['confidence'] for word in line['words']) / len(line['words'])
+                                
+                                # Add line to detected texts
+                                detected_texts.append({
+                                    'text': line['text'],
+                                    'confidence': line['confidence'],
+                                    'bounding_box': line['bbox'],
+                                    'block_bbox': block_bbox,  # Store the parent block's bounding box
+                                    'language': source_lang,
+                                    'block_type': block.block_type.name,
+                                    'is_line': True
+                                })
+            
+            # Find and print the longest text block
+            if detected_texts:
+                longest_text = max(detected_texts, key=lambda x: len(x['text']))
+                logger.info("\n=== Longest Text Block Information ===")
+                logger.info(f"Text content: {longest_text['text']}")
+                logger.info(f"Text length: {len(longest_text['text'])} characters")
+                logger.info(f"Bounding box coordinates: {longest_text['bounding_box']}")
+                logger.info(f"Block bounding box coordinates: {longest_text['block_bbox']}")
+                logger.info(f"Confidence: {longest_text['confidence']:.2%}")
+                logger.info("=====================================\n")
+            
+            # Sort lines by vertical position and then horizontal position
+            detected_texts.sort(key=lambda x: (
+                min(p[1] for p in x['bounding_box']),  # y coordinate
+                min(p[0] for p in x['bounding_box'])   # x coordinate
+            ))
+            
             # Generate overlay with optimized image
             if saved_file_path:
-                # Save optimized image
-                optimized_image.save(saved_file_path, quality=85)
                 output_path = str(Path(saved_file_path).parent / f"{Path(saved_file_path).stem}_overlay.jpg")
+                # Copy optimized image to saved_file_path
+                with open(temp_file, 'rb') as src, open(saved_file_path, 'wb') as dst:
+                    dst.write(src.read())
             else:
-                temp_path = self._get_temp_path("temp_image.jpg")
-                optimized_image.save(temp_path, quality=85)
-                output_path = str(Path(temp_path).parent / f"{Path(temp_path).stem}_overlay.jpg")
+                output_path = str(Path(temp_file).parent / f"{Path(temp_file).stem}_overlay.jpg")
             
-            # Draw overlay
-            self._draw_text_overlay(saved_file_path or temp_path, texts, output_path)
-            
-            # Format and cache results
-            detected_texts = []
-            for text in texts[1:]:
-                vertices = text.bounding_poly.vertices
-                bbox = [[vertex.x, vertex.y] for vertex in vertices]
-                detected_texts.append({
-                    'text': text.description.strip(),
-                    'confidence': getattr(text, 'confidence', 0.99),
-                    'bounding_box': bbox,
-                    'language': source_lang
-                })
+            # Draw overlay using line-level text detection
+            self._draw_text_overlay_by_line(temp_file, detected_texts, output_path)
             
             relative_output_path = str(Path(output_path).relative_to(self._base_dir)).replace("\\", "/")
             if not relative_output_path.startswith('uploads/'):
@@ -380,13 +503,133 @@ class OCRService:
             
             # Manage cache size
             if len(self._ocr_cache) > self._max_cache_size:
-                # Remove oldest entry
                 self._ocr_cache.pop(next(iter(self._ocr_cache)))
                 
             return result
             
         except Exception as e:
             logger.error(f"[OCR Service] Error: {str(e)}")
+            raise
+        finally:
+            # Clean up temporary file
+            if temp_file and Path(temp_file).exists():
+                try:
+                    Path(temp_file).unlink()
+                except Exception as e:
+                    logger.warning(f"[OCR Service] Failed to clean up temporary file: {str(e)}")
+
+    def _draw_text_overlay_by_line(self, image_path: str, texts: list, output_path: str) -> None:
+        """Draw detected text by lines while respecting block boundaries."""
+        try:
+            # Open the image
+            with Image.open(image_path) as image:
+                # Create overlay
+                overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
+                draw = ImageDraw.Draw(overlay)
+                
+                # Try to load Japanese font
+                try:
+                    font = ImageFont.truetype("msgothic.ttc", 1)  # Load with size 1 first
+                except:
+                    try:
+                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 1)
+                    except:
+                        font = ImageFont.load_default()
+                
+                # Group lines by their parent block
+                block_lines = {}
+                for text_item in texts:
+                    # Convert coordinates to float
+                    text_item['block_bbox'] = [[float(x), float(y)] for x, y in text_item['block_bbox']]
+                    text_item['bounding_box'] = [[float(x), float(y)] for x, y in text_item['bounding_box']]
+                    
+                    block_key = str(text_item['block_bbox'])  # Use block bbox as key
+                    if block_key not in block_lines:
+                        block_lines[block_key] = []
+                    block_lines[block_key].append(text_item)
+                
+                # Process each block
+                for block_key, lines in block_lines.items():
+                    # Draw block background
+                    block_bbox = lines[0]['block_bbox']  # All lines in this group share the same block_bbox
+                    draw.polygon([(x, y) for x, y in block_bbox], fill=(0, 0, 0, 160))
+                    draw.polygon([(x, y) for x, y in block_bbox], outline=(65, 105, 225), width=1)
+                    
+                    # Calculate block dimensions
+                    block_min_x = min(p[0] for p in block_bbox)
+                    block_max_x = max(p[0] for p in block_bbox)
+                    block_min_y = min(p[1] for p in block_bbox)
+                    block_max_y = max(p[1] for p in block_bbox)
+                    block_height = block_max_y - block_min_y
+                    block_width = block_max_x - block_min_x
+                    
+                    # Calculate base font size for this block
+                    base_font_size = int(min(block_height, block_width) / (len(lines) * 1.5))  # Adjust based on number of lines
+                    base_font_size = max(12, min(40, base_font_size))  # Clamp font size
+                    
+                    # Process each line in the block
+                    for i, line in enumerate(lines):
+                        # Calculate rotation angle from bounding box
+                        angle = self._calculate_box_angle(line['bounding_box'])
+                        
+                        # Calculate line position within block
+                        line_y = float(block_min_y + (block_height * (i + 0.5)) / len(lines))
+                        
+                        # Calculate font size (slightly smaller than base to ensure fit)
+                        font_size = int(base_font_size * 0.9)
+                        try:
+                            current_font = ImageFont.truetype(font.path, font_size)
+                        except:
+                            current_font = ImageFont.load_default()
+                        
+                        # Get text dimensions
+                        text = line['text']
+                        bbox = draw.textbbox((0, 0), text, font=current_font)
+                        text_width = float(bbox[2] - bbox[0])
+                        text_height = float(bbox[3] - bbox[1])
+                        
+                        # Calculate center of bounding box
+                        center_x = float(sum(p[0] for p in line['bounding_box']) / 4)
+                        center_y = float(sum(p[1] for p in line['bounding_box']) / 4)
+                        
+                        # Create temporary image for rotated text
+                        max_dim = max(text_width, text_height) * 2
+                        txt = Image.new('RGBA', (int(max_dim), int(max_dim)), (0, 0, 0, 0))
+                        txt_draw = ImageDraw.Draw(txt)
+                        
+                        # Draw text centered in temporary image
+                        txt_draw.text(
+                            (txt.width/2, txt.height/2),
+                            text,
+                            font=current_font,
+                            fill=(255, 255, 255, 255),
+                            anchor="mm"
+                        )
+                        
+                        # Rotate text
+                        txt = txt.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+                        
+                        # Calculate paste position
+                        paste_x = int(center_x - txt.width/2)
+                        paste_y = int(center_y - txt.height/2)
+                        
+                        # Draw rotated text background
+                        bg_txt = Image.new('RGBA', txt.size, (0, 0, 0, 200))
+                        overlay.paste(bg_txt, (paste_x, paste_y), txt)
+                        
+                        # Draw rotated text
+                        overlay.paste(txt, (paste_x, paste_y), txt)
+                
+                # Composite the overlay with the original image
+                result = Image.alpha_composite(image.convert('RGBA'), overlay)
+                
+                # Save the result
+                result = result.convert('RGB')
+                result.save(output_path, quality=95)
+                
+                logger.info(f"[OCR Service] Saved line-level overlay visualization to: {output_path}")
+        except Exception as e:
+            logger.error(f"[OCR Service] Error in drawing overlay: {str(e)}")
             raise
 
 # Create a singleton instance
