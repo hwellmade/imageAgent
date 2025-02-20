@@ -37,7 +37,6 @@ def create_vision_prompt(target_lang_code: str, target_lang_name: str) -> str:
 - Extract all visible text while preserving reading order
 - Group text into logical paragraphs
 - Preserve line breaks within paragraphs
-- Indicate text orientation (vertical/horizontal)
 
 2. Translation:
 - Translate all text to {target_lang_name}
@@ -54,19 +53,16 @@ def create_vision_prompt(target_lang_code: str, target_lang_name: str) -> str:
   "original_language": "string",
   "target_language": "{target_lang_code}",
   "metadata": {{
-    "image_orientation": "vertical|horizontal",
     "total_paragraphs": number,
     "total_lines": number
   }},
   "paragraphs": [
     {{
       "id": number,
-      "orientation": "vertical|horizontal",
       "lines": [
         {{
           "original_text": "string",
-          "translated_text": "string",
-          "text_orientation": "vertical|horizontal"
+          "translated_text": "string"
         }}
       ]
     }}
@@ -136,7 +132,7 @@ class VisionService:
             # Remove markdown code block markers
             response_text = response_text.strip()
             if response_text.startswith("```"):
-                # Remove opening ```json or ``` line
+                # Find the first newline after ```json or ```
                 first_newline = response_text.find('\n')
                 if first_newline != -1:
                     response_text = response_text[first_newline + 1:]
@@ -147,80 +143,32 @@ class VisionService:
             # Strip any remaining whitespace
             response_text = response_text.strip()
             
-            def normalize_json_structure(text):
-                """Normalize JSON by parsing and reconstructing problematic parts."""
-                # First pass: fix basic syntax issues
-                text = text.replace('",\n          ,', '",')
-                text = text.replace('",\n        ,', '",')
-                text = text.replace('",\n      ,', '",')
+            # Try to parse the JSON directly first
+            try:
+                result = json.loads(response_text)
+                return json.dumps(result, indent=2, ensure_ascii=False)
+            except json.JSONDecodeError as je:
+                logger.warning(f"Initial JSON parsing failed: {str(je)}")
                 
+                # Clean up common JSON formatting issues
+                # Remove any trailing commas before closing braces/brackets
+                response_text = response_text.replace(",\n}", "\n}")
+                response_text = response_text.replace(",\n]", "\n]")
+                response_text = response_text.replace(",}", "}")
+                response_text = response_text.replace(",]", "]")
+                
+                # Try parsing again after cleanup
                 try:
-                    # Try to parse as is first
-                    return json.loads(text)
-                except json.JSONDecodeError as e:
-                    # If that fails, try more aggressive normalization
-                    lines = text.split('\n')
-                    normalized_lines = []
-                    in_object = False
-                    previous_line = ""
+                    result = json.loads(response_text)
+                    return json.dumps(result, indent=2, ensure_ascii=False)
+                except json.JSONDecodeError as je2:
+                    logger.error(f"JSON parsing failed after cleanup: {str(je2)}")
+                    logger.error(f"Problematic JSON:\n{response_text}")
+                    raise ValueError(f"Invalid JSON format in API response: {str(je2)}")
                     
-                    for line in lines:
-                        line = line.strip()
-                        if not line:
-                            continue
-                            
-                        # Handle property names and values
-                        if ':' in line:
-                            key, value = line.split(':', 1)
-                            key = key.strip().strip('"')
-                            value = value.strip()
-                            
-                            # Ensure key is properly quoted
-                            key = f'"{key}"'
-                            
-                            # Handle string values
-                            if value.startswith('"'):
-                                if not value.endswith('"') or value.endswith('",'):
-                                    value = value.rstrip(',') + '"'
-                            
-                            # Reconstruct the line
-                            line = f'{key}: {value}'
-                            
-                            # Add comma if needed
-                            if not line.endswith('}') and not line.endswith(']') and not line.endswith(','):
-                                line += ','
-                                
-                        # Handle object/array boundaries
-                        if '{' in line:
-                            in_object = True
-                        if '}' in line:
-                            in_object = False
-                            # Remove trailing comma before closing brace
-                            if previous_line.endswith(','):
-                                normalized_lines[-1] = normalized_lines[-1].rstrip(',')
-                        
-                        normalized_lines.append(line)
-                        previous_line = line
-                    
-                    # Join lines and try to parse again
-                    normalized_json = '\n'.join(normalized_lines)
-                    try:
-                        return json.loads(normalized_json)
-                    except json.JSONDecodeError:
-                        # If still failing, try one more time with even more aggressive cleaning
-                        normalized_json = normalized_json.replace(',,', ',')
-                        normalized_json = normalized_json.replace(',}', '}')
-                        normalized_json = normalized_json.replace(',]', ']')
-                        return json.loads(normalized_json)
-            
-            # Normalize and validate JSON structure
-            normalized_data = normalize_json_structure(response_text)
-            
-            # Convert back to formatted string
-            return json.dumps(normalized_data, indent=2, ensure_ascii=False)
-            
         except Exception as e:
-            logger.error(f"Error cleaning JSON response: {str(e)}", exc_info=True)
+            logger.error(f"Error cleaning JSON response: {str(e)}")
+            logger.error(f"Original response text:\n{response_text}")
             raise
 
     def _validate_json_response(self, result: Dict[str, Any]) -> bool:
@@ -233,7 +181,6 @@ class VisionService:
         ]
         
         metadata_fields = [
-            'image_orientation',
             'total_paragraphs',
             'total_lines'
         ]

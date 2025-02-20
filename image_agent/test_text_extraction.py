@@ -81,10 +81,20 @@ async def test_text_extraction(image_path: str, target_lang: str = "en"):
         logger.info("\n=== Test Summary ===")
         logger.info(f"Total paragraphs: {result['metadata']['total_paragraphs']}")
         logger.info(f"Total lines: {result['metadata']['total_lines']}")
-        logger.info(f"Image orientation: {result['metadata']['image_orientation']}")
+        logger.info(f"Page orientation: {result['metadata']['page_info']['orientation'] if 'page_info' in result['metadata'] else 'Not available'}")
         logger.info(f"Original language: {result['original_language']}")
         logger.info(f"Target language: {result['target_language']}")
         logger.info("===================\n")
+        
+        # Validate basic structure and content
+        assert 'metadata' in result, "Missing metadata in result"
+        assert 'total_paragraphs' in result['metadata'], "Missing total_paragraphs in metadata"
+        assert 'total_lines' in result['metadata'], "Missing total_lines in metadata"
+        assert 'page_info' in result['metadata'], "Missing page_info in metadata"
+        assert 'orientation' in result['metadata']['page_info'], "Missing orientation in page_info"
+        assert 'original_language' in result, "Missing original_language in result"
+        assert 'target_language' in result, "Missing target_language in result"
+        assert 'paragraphs' in result, "Missing paragraphs in result"
         
         return result
         
@@ -96,7 +106,7 @@ def main():
     """Main entry point for testing."""
     # Test images
     test_images = [
-        "frontend/test_images/test.jpg"
+        "frontend/test_images/test2.jpg"
     ]
     
     for image_path in test_images:
