@@ -8,6 +8,7 @@ import json
 from PIL import Image
 import base64
 import io
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,10 @@ class VisionService:
                 return json.dumps(result, indent=2, ensure_ascii=False)
             except json.JSONDecodeError as je:
                 logger.warning(f"Initial JSON parsing failed: {str(je)}")
+                
+                # Enhanced JSON cleaning
+                # 1. Fix unquoted property names
+                response_text = re.sub(r'(\s*)([\w_]+)(\s*:)', r'\1"\2"\3', response_text)
                 
                 # Clean up common JSON formatting issues
                 # Remove any trailing commas before closing braces/brackets

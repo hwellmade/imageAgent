@@ -136,4 +136,5 @@ credentials.json
 
 # Logs
 *.log
+*.md
 

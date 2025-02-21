@@ -145,16 +145,40 @@ function App() {
       console.log(`[Timing] Backend request took ${(responseTime - requestStartTime).toFixed(2)}ms`);
 
       const data = await response.json();
+      console.log('🚨 RAW BACKEND RESPONSE:', JSON.stringify(data, null, 2));
+      console.log('========================');
+      console.log('🔍 RESPONSE DATA:', data);
+      console.log('📝 Response type:', typeof data);
+      console.log('🔑 Response keys:', Object.keys(data));
+      console.log('🌐 Translated overlay path:', data.translated_overlay);
+      console.log('🌐 Original overlay path:', data.original_overlay);
       
-      if (data.overlay_image) {
-        const overlayUrl = process.env.NODE_ENV === 'production'
-          ? data.overlay_image
-          : `http://${window.location.hostname}:8000${data.overlay_image}`;
+      // Check if we have the overlay paths
+      if (!data.translated_overlay || !data.original_overlay) {
+        console.error('❌ Missing overlay paths in response');
+        console.log('📋 Full response data:', JSON.stringify(data, null, 2));
+        setError('Missing overlay data in response');
+        return;
+      }
+
+      // Construct URLs
+      const translatedUrl = process.env.NODE_ENV === 'production'
+        ? data.translated_overlay
+        : `http://${window.location.hostname}:8000${data.translated_overlay}`;
         
-        console.log('[Timing] Starting overlay image loading...');
-        const overlayStartTime = performance.now();
-        
-        // Preload image with timeout
+      const originalUrl = process.env.NODE_ENV === 'production'
+        ? data.original_overlay
+        : `http://${window.location.hostname}:8000${data.original_overlay}`;
+      
+      console.log('🔗 Constructed URLs:', {
+        translatedUrl,
+        originalUrl,
+        hostname: window.location.hostname,
+        BACKEND_URL
+      });
+      
+      if (data.translated_overlay && data.original_overlay) {
+        // Preload both images
         const loadImage = async (url: string, timeout: number = 10000): Promise<void> => {
           return new Promise((resolve, reject) => {
             const img = new Image();
@@ -164,8 +188,6 @@ function App() {
             
             img.onload = () => {
               clearTimeout(timeoutId);
-              setOverlayImage(url);
-              setShowOverlay(true);
               resolve();
             };
             
@@ -179,19 +201,31 @@ function App() {
         };
 
         try {
-          await loadImage(overlayUrl);
-          console.log(`[Timing] Overlay image loaded in ${(performance.now() - overlayStartTime).toFixed(2)}ms`);
+          console.log('[Timing] Starting overlay images loading...');
+          const overlayStartTime = performance.now();
+          
+          // Load both images in parallel
+          await Promise.all([
+            loadImage(originalUrl),
+            loadImage(translatedUrl)
+          ]);
+          
+          console.log(`[Timing] Overlay images loaded in ${(performance.now() - overlayStartTime).toFixed(2)}ms`);
+          
+          // Set the translated overlay as the initial view
+          setOverlayImage(translatedUrl);
+          setShowOverlay(true);
           
           // Store analysis result if needed
-          if (data.analysis_result) {
-            setDetectedTexts(data.analysis_result);
+          if (data.text_blocks) {
+            setDetectedTexts(data.text_blocks);
           }
         } catch (error) {
-          console.error('Error loading overlay:', error);
-          setError('Failed to load overlay image. Please try again.');
+          console.error('Error loading overlay images:', error);
+          setError('Failed to load overlay images. Please try again.');
         }
       } else {
-        console.log('No overlay image in response');
+        console.log('No overlay images in response');
         setOverlayImage(null);
         setShowOverlay(false);
       }
@@ -265,15 +299,22 @@ function App() {
       });
 
       if (!apiResponse.ok) {
-        throw new Error(`API request failed: ${apiResponse.statusText}`);
+        const errorData = await apiResponse.json().catch(() => ({ detail: 'Unknown error' }));
+        console.error('🚨 Backend Error:', {
+          status: apiResponse.status,
+          statusText: apiResponse.statusText,
+          error: errorData
+        });
+        throw new Error(`OCR request failed: ${errorData.detail || apiResponse.statusText}`);
       }
 
       const data = await apiResponse.json();
+      console.log('🔍 Response data:', data);
       
-      if (data.overlay_image) {
+      if (data.translated_overlay && data.original_overlay) {
         const overlayUrl = process.env.NODE_ENV === 'production'
-          ? data.overlay_image
-          : `http://${window.location.hostname}:8000${data.overlay_image}`;
+          ? data.translated_overlay
+          : `http://${window.location.hostname}:8000${data.translated_overlay}`;
         
         console.log('[Timing] Starting overlay image loading...');
         const overlayStartTime = performance.now();
@@ -307,15 +348,15 @@ function App() {
           console.log(`[Timing] Overlay image loaded in ${(performance.now() - overlayStartTime).toFixed(2)}ms`);
           
           // Store analysis result if needed
-          if (data.analysis_result) {
-            setDetectedTexts(data.analysis_result);
+          if (data.text_blocks) {
+            setDetectedTexts(data.text_blocks);
           }
         } catch (error) {
           console.error('Error loading overlay:', error);
           setError('Failed to load overlay image. Please try again.');
         }
       } else {
-        console.log('No overlay image in response');
+        console.log('No overlay images in response:', data);
         setOverlayImage(null);
         setShowOverlay(false);
       }

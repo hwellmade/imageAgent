@@ -15,11 +15,13 @@ import logging
 import aiofiles
 from fastapi.staticfiles import StaticFiles
 import sys
+import json
 
 from .services.ocr_service import ocr_service
 from .services.translation_service import translation_service
 from .schemas import UploadResponse, OCRResponse, TextDetection
 from .services.vision_service import vision_service
+from .services.image_translation_service import image_translation_service
 
 # Configure logging
 logging.basicConfig(
@@ -177,11 +179,11 @@ async def perform_ocr(
     target_lang: str = 'en'
 ):
     """
-    Perform OCR and translation on an uploaded image file using Gemini Vision.
+    Process image using hybrid OCR+LLM approach and return overlay images.
     """
     start_time = datetime.now()
     try:
-        logger.info(f"[Vision] Starting analysis process at {start_time}")
+        logger.info(f"[Translation] Starting analysis process at {start_time}")
         
         # Create upload directory for this month
         save_dir = ensure_upload_dirs()
@@ -195,20 +197,20 @@ async def perform_ocr(
         content = await file.read()
         async with aiofiles.open(file_path, 'wb') as out_file:
             await out_file.write(content)
-        logger.info(f"[Vision] File saved to: {file_path}")
-        logger.info(f"[Vision] File save took: {(datetime.now() - save_start).total_seconds():.2f}s")
+        logger.info(f"[Translation] File saved to: {file_path}")
+        logger.info(f"[Translation] File save took: {(datetime.now() - save_start).total_seconds():.2f}s")
         
         try:
-            # Process with Gemini Vision
-            vision_start = datetime.now()
-            result = await vision_service.analyze_image(
-                image_path=str(file_path),
-                target_lang_code=target_lang
+            # Process with hybrid approach
+            process_start = datetime.now()
+            result = await image_translation_service.process_image(
+                str(file_path),
+                target_lang=target_lang
             )
-            logger.info(f"[Vision] Analysis took: {(datetime.now() - vision_start).total_seconds():.2f}s")
+            logger.info(f"[Translation] Processing took: {(datetime.now() - process_start).total_seconds():.2f}s")
             
             if not result:
-                logger.warning("[Vision] No text detected in image")
+                logger.warning("[Translation] No text detected in image")
                 return JSONResponse(
                     status_code=200,
                     content={
@@ -218,85 +220,41 @@ async def perform_ocr(
                     }
                 )
             
-            # Generate overlay images
-            overlay_start = datetime.now()
-            current_date = datetime.now()
-            year = str(current_date.year)
-            month = f"{current_date.month:02d}"
+            # Convert paths to URLs
+            logger.info(f"[Translation] Raw overlay paths from result: {result['original_overlay_path']}, {result['translated_overlay_path']}")
             
-            # Construct filenames
-            original_filename = Path(file_path).name
-            original_overlay_filename = f"{Path(file_path).stem}_original_overlay.jpg"
-            translated_overlay_filename = f"{Path(file_path).stem}_translated_overlay.jpg"
+            original_overlay_url = f"/uploads/{Path(result['original_overlay_path']).relative_to(UPLOAD_DIR)}"
+            translated_overlay_url = f"/uploads/{Path(result['translated_overlay_path']).relative_to(UPLOAD_DIR)}"
             
-            original_overlay_path = save_dir / original_overlay_filename
-            translated_overlay_path = save_dir / translated_overlay_filename
+            logger.info(f"[Translation] Converted URLs:")
+            logger.info(f"  Original: {original_overlay_url}")
+            logger.info(f"  Translated: {translated_overlay_url}")
             
-            # Draw original text overlay
-            await ocr_service._draw_text_overlay_by_line(
-                str(file_path),
-                result['paragraphs'],
-                str(original_overlay_path),
-                use_translated_text=False
-            )
+            response_data = {
+                "success": True,
+                "detected_source_lang": result['detected_source_lang'],
+                "target_language": result['target_language'],
+                "metadata": result['metadata'],
+                "original_image": f"/uploads/{filename}",
+                "original_overlay": original_overlay_url,
+                "translated_overlay": translated_overlay_url
+            }
             
-            # Draw translated text overlay
-            await ocr_service._draw_text_overlay_by_line(
-                str(file_path),
-                result['paragraphs'],
-                str(translated_overlay_path),
-                use_translated_text=True
-            )
+            logger.info(f"[Translation] Final response data: {json.dumps(response_data, indent=2)}")
+            return response_data
             
-            # Construct URLs
-            original_url = f"/uploads/{year}/{month}/{original_filename}"
-            original_overlay_url = f"/uploads/{year}/{month}/{original_overlay_filename}"
-            translated_overlay_url = f"/uploads/{year}/{month}/{translated_overlay_filename}"
-            
-            logger.info(f"[Vision] Original image URL: {original_url}")
-            logger.info(f"[Vision] Original overlay URL: {original_overlay_url}")
-            logger.info(f"[Vision] Translated overlay URL: {translated_overlay_url}")
-            
-            response = JSONResponse(
-                status_code=200,
-                content={
-                    "detected_source_lang": result.get('original_language', 'unknown'),
-                    "target_language": target_lang,
-                    "original_image": original_url,
-                    "original_overlay": original_overlay_url,
-                    "translated_overlay": translated_overlay_url,
-                    "analysis_result": result
-                }
-            )
-            
-            total_time = (datetime.now() - start_time).total_seconds()
-            logger.info(f"[Vision] Total processing time: {total_time:.2f}s")
-            return response
-            
-        except Exception as vision_error:
-            error_time = (datetime.now() - start_time).total_seconds()
-            logger.error(f"[Vision] Processing error after {error_time:.2f}s: {str(vision_error)}")
-            # Clean up the saved file if processing failed
-            try:
-                if file_path.exists():
-                    file_path.unlink()
-                    logger.info(f"[Vision] Cleaned up file after error: {file_path}")
-            except Exception as cleanup_error:
-                logger.error(f"[Vision] Failed to clean up file after error: {str(cleanup_error)}")
-            
+        except Exception as e:
+            logger.error(f"[Translation] Processing error: {str(e)}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Vision processing failed: {str(vision_error)}"
+                detail=f"Image processing failed: {str(e)}"
             )
             
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        error_time = (datetime.now() - start_time).total_seconds()
-        logger.error(f"[Vision] Error after {error_time:.2f}s: {str(e)}")
+        logger.error(f"[Translation] Error: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail=f"Failed to process image: {str(e)}"
         )
 
 @app.post("/api/translate")
