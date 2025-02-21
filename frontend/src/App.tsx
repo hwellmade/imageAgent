@@ -663,6 +663,9 @@ function App() {
                 <div className="relative bg-blue-50 rounded-lg p-4 shadow-lg border border-blue-100">
                   <div className="min-h-[12rem]">
                     <p>this is a test AI message, will be replace by LLM answers. stay tuned</p>
+                    <p>this is a test AI message, will be replace by LLM answers. stay tuned</p>
+                    <p>this is a test AI message, will be replace by LLM answers. stay tuned</p>
+                    <p>this is a test AI message, will be replace by LLM answers. stay tuned</p>
                   </div>
                   <button 
                     onClick={() => setShowAIResponse(false)}
