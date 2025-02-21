@@ -43,9 +43,9 @@ class OverlayService:
         # Language-specific font paths with full system paths
         font_paths = {
             'en': [
-                system_font_path + "msgothic.ttf",    # Corbel Light segoeui
-                system_font_path + "arial.ttf",   # Regular Corbel as fallback
-                system_font_path + "calibri.ttf"   # Segoe UI as final fallback
+                system_font_path + "msgothic.ttf",    
+                system_font_path + "arial.ttf",   
+                system_font_path + "calibri.ttf"  
             ],
             'ja': [
                 system_font_path + "meiryo.ttc",   # Meiryo

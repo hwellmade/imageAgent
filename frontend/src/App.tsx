@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { CameraIcon, ArrowUpTrayIcon, LanguageIcon } from '@heroicons/react/24/solid'
 import './App.css'
+// Import custom icons
+import uploadIcon from './assets/icons/button_upload.png'
+import cameraIcon from './assets/icons/button_camera.png'
+import aiIcon from './assets/icons/button_AI.png'
 
 interface TextDetection {
   text: string;
@@ -45,6 +49,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [showCamera, setShowCamera] = useState(false)
   const [detectedTexts, setDetectedTexts] = useState<TextDetection[]>([])
+  const [showAIResponse, setShowAIResponse] = useState(false)
   
   // Hidden file input ref
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -396,242 +401,250 @@ function App() {
     }
   }
 
-  return (
-    <div className="min-h-screen bg-gray-100 py-6 flex flex-col justify-center sm:py-12">
-      <div className="relative py-3 sm:max-w-4xl sm:mx-auto">
-        <div className="relative px-4 py-10 bg-white shadow-lg sm:rounded-3xl sm:p-20">
-          <div className="max-w-4xl mx-auto">
-            <div className="divide-y divide-gray-200">
-              {/* Language Selection Area */}
-              <div className="flex justify-between items-center pb-8">
-                <div className="flex items-center space-x-4">
-                  <select
-                    value={sourceLanguage}
-                    onChange={(e) => setSourceLanguage(e.target.value)}
-                    className="block w-32 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
-                  >
-                    <option value="auto">Auto Detect</option>
-                    <option value="ja">Japanese</option>
-                    <option value="en">English</option>
-                    <option value="ko">Korean</option>
-                    <option value="zh">Chinese</option>
-                  </select>
-                  <span className="text-gray-500">→</span>
-                  <select
-                    value={targetLanguage}
-                    onChange={(e) => setTargetLanguage(e.target.value)}
-                    className="block w-32 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
-                  >
-                    <option value="en">English</option>
-                    <option value="ja">Japanese</option>
-                    <option value="ko">Korean</option>
-                    <option value="zh">Chinese</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Error display */}
-              {error && (
-                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
-                  <span className="block sm:inline">{error}</span>
-                </div>
-              )}
-
-              {/* Loading indicator */}
-              {loading && (
-                <div className="flex items-center justify-center mb-4">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-                </div>
-              )}
-
-              {/* Image display area */}
-              <div className="py-8">
-                <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg bg-gray-100 flex items-center justify-center">
-                  {showCamera ? (
-                    // Camera view
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      className="w-full h-full object-cover"
-                    />
-                  ) : selectedImage ? (
-                    // Image view with overlay
-                    <div className="relative w-full h-full">
-                      <div 
-                        className="w-full h-full cursor-pointer"
-                        onDoubleClick={() => {
-                          if (overlayImage) {
-                            setShowOverlay(!showOverlay);
-                            console.log('Toggling overlay:', !showOverlay, 'Mode:', showOverlay ? 'Original' : 'Translated');
-                          }
-                        }}
-                        onTouchStart={(e) => {
-                          const now = Date.now();
-                          const timeDiff = now - lastTapRef.current;
-                          
-                          if (timeDiff < 300 && overlayImage) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setShowOverlay(!showOverlay);
-                            console.log('Toggling overlay:', !showOverlay, 'Mode:', showOverlay ? 'Original' : 'Translated');
-                            lastTapRef.current = 0;
-                          } else {
-                            lastTapRef.current = now;
-                          }
-                        }}
-                        title="Double-click/tap to toggle between original and translated view"
-                      >
-                        <img
-                          src={showOverlay ? overlayImage || selectedImage : selectedImage}
-                          alt={showOverlay ? "Translated View" : "Original View"}
-                          className="w-full h-full object-contain"
-                          style={{ touchAction: 'manipulation' }}
-                        />
-                      </div>
-                      {overlayImage && (
-                        <>
-                          <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm">
-                            {showOverlay ? 'Translated Text' : 'Original Text'}
-                          </div>
-                          {/* Toggle button */}
-                          <button
-                            onClick={() => {
-                              setShowOverlay(!showOverlay);
-                              console.log('Toggling overlay:', !showOverlay, 'Mode:', showOverlay ? 'Original' : 'Translated');
-                            }}
-                            className="absolute top-2 right-2 bg-black bg-opacity-50 text-white p-2 rounded-full hover:bg-opacity-75 transition-opacity"
-                            aria-label="Toggle between original and translated view"
-                          >
-                            <svg 
-                              className="w-6 h-6" 
-                              fill="none" 
-                              stroke="currentColor" 
-                              viewBox="0 0 24 24"
-                            >
-                              <path 
-                                strokeLinecap="round" 
-                                strokeLinejoin="round" 
-                                strokeWidth={2} 
-                                d={showOverlay 
-                                  ? "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" 
-                                  : "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"
-                                }
-                              />
-                            </svg>
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    // Placeholder
-                    <div className="text-center">
-                      <p className="text-gray-500">No image selected</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Action buttons */}
-                <div className="flex justify-center space-x-4 mt-4">
-                  {/* Camera button */}
-                  {!showCamera ? (
-                    <button
-                      onClick={startCamera}
-                      className="bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-blue-600 transition-colors"
-                    >
-                      <CameraIcon className="h-5 w-5" />
-                      <span>Camera</span>
-                    </button>
-                  ) : (
-                    <button
-                      onClick={captureImage}
-                      className="bg-green-500 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-green-600 transition-colors"
-                    >
-                      <CameraIcon className="h-5 w-5" />
-                      <span>Capture</span>
-                    </button>
-                  )}
-
-                  {/* Upload button */}
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="bg-purple-500 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-purple-600 transition-colors"
-                  >
-                    <ArrowUpTrayIcon className="h-5 w-5" />
-                    <span>Upload</span>
-                  </button>
-
-                  {/* Hidden file input */}
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleFileInputChange}
-                    accept="image/*"
-                    className="hidden"
-                  />
-
-                  {/* Translate button - always visible */}
-                  <button
-                    onClick={() => {
-                      if (!selectedImage) {
-                        setError('Please take or upload an image first')
-                        return
-                      }
-                      handleTranslateClick()
-                    }}
-                    className={`px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors ${
-                      selectedImage 
-                        ? 'bg-indigo-500 hover:bg-indigo-600 text-white' 
-                        : 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                    }`}
-                    disabled={loading || showCamera}
-                  >
-                    <LanguageIcon className="h-5 w-5" />
-                    <span>Translate</span>
-                  </button>
-                </div>
-
-                {/* Feedback message when no image */}
-                {!selectedImage && !showCamera && (
-                  <div className="mt-4 text-gray-500 text-sm">
-                    Please take or upload an image to translate
-                  </div>
-                )}
+  // Language Selection Component
+  const LanguageSelectionBar = () => (
+    <div className="fixed top-0 left-0 right-0 bg-gray-800 py-2 z-50">
+      <div className="flex justify-center items-center space-x-4">
+        <select
+          value={sourceLanguage}
+          onChange={(e) => setSourceLanguage(e.target.value)}
+          className="block w-32 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 bg-gray-700 text-white"
+        >
+          <option value="auto">Auto Detect</option>
+          <option value="ja">Japanese</option>
+          <option value="en">English</option>
+          <option value="ko">Korean</option>
+          <option value="zh">Chinese</option>
+        </select>
+        <span className="text-gray-400">→</span>
+        <select
+          value={targetLanguage}
+          onChange={(e) => setTargetLanguage(e.target.value)}
+          className="block w-32 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 bg-gray-700 text-white"
+        >
+          <option value="en">English</option>
+          <option value="ja">Japanese</option>
+          <option value="ko">Korean</option>
+          <option value="zh">Chinese</option>
+        </select>
       </div>
+    </div>
+  );
 
-              {/* AI Assistants Area */}
-              <div className="pt-8">
-                <div className="flex space-x-4">
-                  <button
-                    onClick={() => {
-                      // Add AI assistant functionality
-                    }}
-                    className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg transition-colors"
-                  >
-                    Explain the content
-                  </button>
-                  <button
-                    onClick={() => {
-                      // Add AI assistant functionality
-                    }}
-                    className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg transition-colors"
-                  >
-                    Maybe you want to ask this?
-                  </button>
-                  <button
-                    onClick={() => {
-                      // Add AI assistant functionality
-                    }}
-                    className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg transition-colors"
-                  >
-                    Custom
+  // Bottom Action Bar Component
+  const BottomActionBar = () => (
+    <div className="fixed bottom-0 left-0 right-0 bg-white py-4 px-4 shadow-lg">
+      <div className="flex justify-center space-x-6 items-center">
+        {/* Share/Upload Button */}
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="flex items-center justify-center hover:opacity-80 transition-opacity"
+        >
+          <img src={uploadIcon} alt="Upload" className="w-12 h-12" />
         </button>
+
+        {/* Camera Button */}
+        {!showCamera ? (
+          <button
+            onClick={startCamera}
+            className="flex items-center justify-center hover:opacity-80 transition-opacity"
+          >
+            <img src={cameraIcon} alt="Camera" className="w-16 h-16" />
+          </button>
+        ) : (
+          <button
+            onClick={captureImage}
+            className="flex items-center justify-center hover:opacity-80 transition-opacity"
+          >
+            <img src={cameraIcon} alt="Capture" className="w-16 h-16" />
+          </button>
+        )}
+
+        {/* AI Assistant Button */}
+        <button
+          onClick={() => {
+            if (!selectedImage) {
+              setError('Please take or upload an image first')
+              return
+            }
+            handleTranslateClick()
+          }}
+          className={`flex items-center justify-center transition-opacity ${
+            selectedImage 
+              ? 'hover:opacity-80' 
+              : 'opacity-50 cursor-not-allowed'
+          }`}
+          disabled={loading || showCamera}
+        >
+          <img src={aiIcon} alt="AI Assistant" className="w-12 h-12" />
+        </button>
+
+        {/* Hidden file input */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileInputChange}
+          accept="image/*"
+          className="hidden"
+        />
+      </div>
+    </div>
+  );
+
+  console.log('App rendering, showAIResponse:', showAIResponse);
+
+  return (
+    <div className="min-h-screen flex flex-col bg-white">
+      <LanguageSelectionBar />
+      
+      {/* Main content area with fixed heights */}
+      <div className="flex flex-col h-screen pt-0">
+        {/* Error display */}
+        {error && (
+          <div className="absolute top-0 left-0 right-0 bg-red-100 border border-red-400 text-red-700 px-4 py-3 z-50" role="alert">
+            <span className="block sm:inline">{error}</span>
+          </div>
+        )}
+
+        {/* Loading indicator */}
+        {loading && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+          </div>
+        )}
+
+        {/* Fixed height image display area */}
+        <div className="flex-1 px-0 pb-32 max-h-[calc(100vh-12rem)]">
+          <div className="w-full h-full flex items-center justify-center">
+            {showCamera ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-contain"
+              />
+            ) : selectedImage ? (
+              <div className="relative w-full h-full">
+                <div 
+                  className="w-full h-full cursor-pointer"
+                  onDoubleClick={() => {
+                    if (overlayImage) {
+                      setShowOverlay(!showOverlay);
+                    }
+                  }}
+                  onTouchStart={(e) => {
+                    const now = Date.now();
+                    const timeDiff = now - lastTapRef.current;
+                    
+                    if (timeDiff < 300 && overlayImage) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setShowOverlay(!showOverlay);
+                      lastTapRef.current = 0;
+                    } else {
+                      lastTapRef.current = now;
+                    }
+                  }}
+                  title="Double-click/tap to toggle between original and translated view"
+                >
+                  <img
+                    src={showOverlay ? overlayImage || selectedImage : selectedImage}
+                    alt={showOverlay ? "Translated View" : "Original View"}
+                    className="w-full h-full object-contain"
+                    style={{ touchAction: 'manipulation' }}
+                  />
                 </div>
+                {overlayImage && (
+                  <>
+                    <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm">
+                      {showOverlay ? 'Translated Text' : 'Original Text'}
+                    </div>
+                    <button
+                      onClick={() => setShowOverlay(!showOverlay)}
+                      className="absolute top-2 right-2 bg-black bg-opacity-50 text-white p-2 rounded-full hover:bg-opacity-75 transition-opacity"
+                      aria-label="Toggle between original and translated view"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                          d={showOverlay 
+                            ? "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" 
+                            : "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"} 
+                        />
+                      </svg>
+                    </button>
+                  </>
+                )}
               </div>
-            </div>
+            ) : (
+              <div className="text-center">
+                <p className="text-gray-500">No image selected</p>
+              </div>
+            )}
           </div>
         </div>
+
+        {/* AI Assistant Area - Now part of the main flow */}
+        <div className="fixed bottom-[5.5rem] left-0 right-0 px-2 z-40">
+          {showAIResponse ? (
+            <div className="relative bg-blue-50 rounded-lg p-4 shadow-lg border border-blue-100 max-h-[calc(100vh-24rem)] overflow-y-auto">
+              <div className="min-h-[12rem]">
+                <p>this is a test AI message, will be replace by LLM answers. stay tuned</p>
+              </div>
+              <button 
+                onClick={() => {
+                  console.log('Return clicked');
+                  setShowAIResponse(false);
+                }}
+                className="absolute top-2 right-2 text-blue-500 hover:text-blue-700"
+              >
+                Return
+              </button>
+            </div>
+          ) : (
+            <div className="flex justify-center space-x-4">
+              {/* First button */}
+              <button
+                onClick={(e) => {
+                  (e.target as HTMLElement).blur();
+                  setShowAIResponse(true);
+                }}
+                tabIndex={-1}
+                className="flex-1 bg-blue-50 hover:bg-blue-100 focus:bg-blue-50 active:bg-blue-100 text-gray-700 font-semibold py-5 px-5 rounded-lg transition-colors shadow-lg border border-blue-100 min-h-[5rem] flex items-center justify-center text-lg"
+              >
+                Explain the content
+              </button>
+
+              {/* Middle button - Let's inspect its container */}
+              <div className="flex-1">
+                <button
+                  onClick={(e) => {
+                    (e.target as HTMLElement).blur();
+                    setShowAIResponse(true);
+                  }}
+                  tabIndex={-1}
+                  className="w-full bg-blue-50 hover:bg-blue-100 focus:bg-blue-50 active:bg-blue-100 text-gray-700 font-semibold py-5 px-5 rounded-lg transition-colors shadow-lg border border-blue-100 min-h-[5rem] flex items-center justify-center text-lg"
+                >
+                  Maybe you want to ask this?
+                </button>
+              </div>
+
+              {/* Third button */}
+              <button
+                onClick={(e) => {
+                  (e.target as HTMLElement).blur();
+                  setShowAIResponse(true);
+                }}
+                tabIndex={-1}
+                className="flex-1 bg-blue-50 hover:bg-blue-100 focus:bg-blue-50 active:bg-blue-100 text-gray-700 font-semibold py-5 px-5 rounded-lg transition-colors shadow-lg border border-blue-100 min-h-[5rem] flex items-center justify-center text-lg"
+              >
+                Custom
+              </button>
+            </div>
+          )}
+        </div>
       </div>
+
+      <BottomActionBar />
     </div>
   )
 }
