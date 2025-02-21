@@ -323,83 +323,166 @@ function App() {
   // Camera functions
   const startCamera = async () => {
     try {
-      const permissions = await navigator.permissions.query({ name: 'camera' as PermissionName })
+      // Reset any previous errors
+      setError(null);
+      console.log('Starting camera initialization...');
+      console.log('Checking navigator.mediaDevices:', !!navigator.mediaDevices);
+      console.log('Checking getUserMedia:', !!navigator.mediaDevices?.getUserMedia);
+
+      // Most basic camera request possible
+      const stream = await navigator.mediaDevices?.getUserMedia({
+        video: true,
+        audio: false
+      });
+
+      console.log('Camera stream obtained:', !!stream);
       
-      if (permissions.state === 'denied') {
-        setError('Camera permission was denied. Please enable it in your browser settings.')
-        return
+      if (!videoRef.current) {
+        throw new Error('Video element not found');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { exact: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        }
-      })
+      // Set up the video stream
+      videoRef.current.srcObject = stream;
+      streamRef.current = stream;
+      
+      console.log('Stream attached to video element');
+      setShowCamera(true);
+      setError(null);
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        streamRef.current = stream
-      }
-      setShowCamera(true)
-      setError(null)
     } catch (err) {
-      // If environment camera fails, try without exact requirement
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'environment'
-          }
-        })
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          streamRef.current = stream
+      console.error('Detailed camera error:', err);
+      
+      // Check if we're in a secure context
+      console.log('Is secure context:', window.isSecureContext);
+      console.log('Protocol:', window.location.protocol);
+      
+      let errorMessage = 'Could not access camera. ';
+      
+      if (!window.isSecureContext) {
+        errorMessage = 'Camera access requires a secure connection (HTTPS). Please use HTTPS or localhost.';
+      } else if (!navigator.mediaDevices) {
+        errorMessage = 'Camera API is not available. Please check if your browser supports camera access.';
+      } else if (err instanceof Error) {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          errorMessage = 'Please allow camera access in your browser settings and try again.';
+        } else if (err.name === 'NotFoundError') {
+          errorMessage = 'No camera found on your device.';
+        } else if (err.name === 'NotReadableError') {
+          errorMessage = 'Your camera might be in use by another app.';
+        } else if (err.name === 'SecurityError') {
+          errorMessage = 'Camera access is blocked by your browser security settings.';
+        } else {
+          errorMessage = `Camera error: ${err.message}`;
         }
-        setShowCamera(true)
-        setError(null)
-      } catch (fallbackErr) {
-        setError('Failed to access camera. Please check permissions and try again.')
       }
+
+      setError(errorMessage);
+      setShowCamera(false);
     }
-  }
+  };
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
+    try {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => {
+          track.stop();
+          console.log('Camera track stopped:', track.label);
+        });
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      setShowCamera(false);
+    } catch (err) {
+      console.error('Error stopping camera:', err);
+      // Even if there's an error stopping the camera, we should still update the UI
+      setShowCamera(false);
     }
-    setShowCamera(false)
-  }
+  };
 
   const captureImage = async () => {
-    if (!videoRef.current) return
+    if (!videoRef.current) {
+      setError('Camera initialization failed. Please try restarting the camera.');
+      return;
+    }
 
     try {
-      const canvas = document.createElement('canvas')
-      canvas.width = videoRef.current.videoWidth
-      canvas.height = videoRef.current.videoHeight
+      // Ensure video is playing and has valid dimensions
+      if (videoRef.current.readyState !== videoRef.current.HAVE_ENOUGH_DATA) {
+        throw new Error('Camera stream is not ready yet. Please wait a moment and try again.');
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
       
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('Failed to get canvas context')
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Failed to initialize image capture. Please try again.');
+      }
       
-      ctx.drawImage(videoRef.current, 0, 0)
+      // Draw the current video frame
+      ctx.drawImage(videoRef.current, 0, 0);
       
-      const blob = await new Promise<Blob>((resolve) => {
-        canvas.toBlob((blob) => {
-          if (blob) resolve(blob)
-        }, 'image/jpeg', 0.95)
-      })
+      // Convert to blob with good quality
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          (blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('Failed to capture image. Please try again.'));
+          },
+          'image/jpeg',
+          0.95
+        );
+      });
       
-      const imageUrl = URL.createObjectURL(blob)
-      setSelectedImage(imageUrl)
-      stopCamera()
+      const imageUrl = URL.createObjectURL(blob);
+      setSelectedImage(imageUrl);
+      stopCamera();
+      setError(null);
       
     } catch (err) {
-      console.error('Error capturing image:', err)
-      setError(err instanceof Error ? err.message : 'Failed to capture image')
+      console.error('Error capturing image:', err);
+      setError(err instanceof Error ? err.message : 'Failed to capture image. Please try again.');
+      // Don't stop the camera on capture error so user can try again
     }
-  }
+  };
+
+  // Add a cleanup effect for camera
+  useEffect(() => {
+    return () => {
+      // Cleanup camera on component unmount
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  // Update video element with better error handling
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const handleSuccess = () => {
+      console.log('Camera stream started successfully');
+      setError(null);
+    };
+
+    const handleError = (event: Event) => {
+      console.error('Video element error:', event);
+      setError('Camera stream failed. Please try again.');
+      stopCamera();
+    };
+
+    video.addEventListener('loadedmetadata', handleSuccess);
+    video.addEventListener('error', handleError);
+
+    return () => {
+      video.removeEventListener('loadedmetadata', handleSuccess);
+      video.removeEventListener('error', handleError);
+    };
+  }, [showCamera]); // Re-run when showCamera changes
 
   // Language Selection Component
   const LanguageSelectionBar = () => (
@@ -433,75 +516,73 @@ function App() {
 
   // Bottom Action Bar Component
   const BottomActionBar = () => (
-    <div className="fixed bottom-0 left-0 right-0 bg-white py-4 px-4 shadow-lg">
-      <div className="flex justify-center space-x-6 items-center">
-        {/* Share/Upload Button */}
+    <div className="flex justify-center space-x-6 items-center">
+      {/* Share/Upload Button */}
+      <button
+        onClick={() => fileInputRef.current?.click()}
+        className="flex items-center justify-center hover:opacity-80 transition-opacity"
+      >
+        <img src={uploadIcon} alt="Upload" className="w-12 h-12" />
+      </button>
+
+      {/* Camera Button */}
+      {!showCamera ? (
         <button
-          onClick={() => fileInputRef.current?.click()}
+          onClick={startCamera}
           className="flex items-center justify-center hover:opacity-80 transition-opacity"
         >
-          <img src={uploadIcon} alt="Upload" className="w-12 h-12" />
+          <img src={cameraIcon} alt="Camera" className="w-16 h-16" />
         </button>
-
-        {/* Camera Button */}
-        {!showCamera ? (
-          <button
-            onClick={startCamera}
-            className="flex items-center justify-center hover:opacity-80 transition-opacity"
-          >
-            <img src={cameraIcon} alt="Camera" className="w-16 h-16" />
-          </button>
-        ) : (
-          <button
-            onClick={captureImage}
-            className="flex items-center justify-center hover:opacity-80 transition-opacity"
-          >
-            <img src={cameraIcon} alt="Capture" className="w-16 h-16" />
-          </button>
-        )}
-
-        {/* AI Assistant Button */}
+      ) : (
         <button
-          onClick={() => {
-            if (!selectedImage) {
-              setError('Please take or upload an image first')
-              return
-            }
-            handleTranslateClick()
-          }}
-          className={`flex items-center justify-center transition-opacity ${
-            selectedImage 
-              ? 'hover:opacity-80' 
-              : 'opacity-50 cursor-not-allowed'
-          }`}
-          disabled={loading || showCamera}
+          onClick={captureImage}
+          className="flex items-center justify-center hover:opacity-80 transition-opacity"
         >
-          <img src={aiIcon} alt="AI Assistant" className="w-12 h-12" />
+          <img src={cameraIcon} alt="Capture" className="w-16 h-16" />
         </button>
+      )}
 
-        {/* Hidden file input */}
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleFileInputChange}
-          accept="image/*"
-          className="hidden"
-        />
-      </div>
+      {/* AI Assistant Button */}
+      <button
+        onClick={() => {
+          if (!selectedImage) {
+            setError('Please take or upload an image first')
+            return
+          }
+          handleTranslateClick()
+        }}
+        className={`flex items-center justify-center transition-opacity ${
+          selectedImage 
+            ? 'hover:opacity-80' 
+            : 'opacity-50 cursor-not-allowed'
+        }`}
+        disabled={loading || showCamera}
+      >
+        <img src={aiIcon} alt="AI Assistant" className="w-12 h-12" />
+      </button>
+
+      {/* Hidden file input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileInputChange}
+        accept="image/*"
+        className="hidden"
+      />
     </div>
   );
 
   console.log('App rendering, showAIResponse:', showAIResponse);
 
   return (
-    <div className="min-h-screen flex flex-col bg-white">
+    <div className="h-[100vh] max-h-[100vh] overflow-hidden flex flex-col bg-white">
       <LanguageSelectionBar />
       
-      {/* Main content area with fixed heights */}
-      <div className="flex flex-col h-screen pt-0">
+      {/* Main content area with viewport height */}
+      <main className="flex-1 flex flex-col overflow-hidden">
         {/* Error display */}
         {error && (
-          <div className="absolute top-0 left-0 right-0 bg-red-100 border border-red-400 text-red-700 px-4 py-3 z-50" role="alert">
+          <div className="absolute top-10 left-0 right-0 bg-red-100 border border-red-400 text-red-700 px-4 py-3 z-50" role="alert">
             <span className="block sm:inline">{error}</span>
           </div>
         )}
@@ -513,138 +594,114 @@ function App() {
           </div>
         )}
 
-        {/* Fixed height image display area */}
-        <div className="flex-1 px-0 pb-32 max-h-[calc(100vh-12rem)]">
-          <div className="w-full h-full flex items-center justify-center">
-            {showCamera ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                className="w-full h-full object-contain"
-              />
-            ) : selectedImage ? (
-              <div className="relative w-full h-full">
-                <div 
-                  className="w-full h-full cursor-pointer"
-                  onDoubleClick={() => {
-                    if (overlayImage) {
-                      setShowOverlay(!showOverlay);
-                    }
+        {/* Content wrapper with dynamic heights */}
+        <div className="flex flex-col h-full">
+          {/* Language bar spacer */}
+          <div className="h-12" />
+
+          {/* Image display area - takes remaining space */}
+          <div className="flex-1 overflow-hidden p-4">
+            <div className="h-full w-full flex items-center justify-center relative">
+              {/* Dashed border box - always visible */}
+              <div className="absolute inset-0 border-2 border-blue-200 border-dashed rounded-lg"></div>
+              
+              {showCamera ? (
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="h-full w-full object-contain relative z-10"
+                  onError={(e) => {
+                    console.error('Video element error:', e);
+                    setError('Video playback failed. Please try again.');
                   }}
-                  onTouchStart={(e) => {
-                    const now = Date.now();
-                    const timeDiff = now - lastTapRef.current;
-                    
-                    if (timeDiff < 300 && overlayImage) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setShowOverlay(!showOverlay);
-                      lastTapRef.current = 0;
-                    } else {
-                      lastTapRef.current = now;
-                    }
-                  }}
-                  title="Double-click/tap to toggle between original and translated view"
-                >
-                  <img
-                    src={showOverlay ? overlayImage || selectedImage : selectedImage}
-                    alt={showOverlay ? "Translated View" : "Original View"}
-                    className="w-full h-full object-contain"
-                    style={{ touchAction: 'manipulation' }}
-                  />
+                />
+              ) : selectedImage ? (
+                <div className="relative h-full w-full z-10">
+                  <div className="h-full w-full">
+                    <img
+                      src={showOverlay ? overlayImage || selectedImage : selectedImage}
+                      alt={showOverlay ? "Translated View" : "Original View"}
+                      className="h-full w-full object-contain"
+                      style={{ touchAction: 'manipulation' }}
+                    />
+                  </div>
+                  {overlayImage && (
+                    <>
+                      <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm">
+                        {showOverlay ? 'Translated Text' : 'Original Text'}
+                      </div>
+                      <button
+                        onClick={() => setShowOverlay(!showOverlay)}
+                        className="absolute top-2 right-2 bg-black bg-opacity-50 text-white p-2 rounded-full hover:bg-opacity-75 transition-opacity"
+                      >
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                            d={showOverlay 
+                              ? "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" 
+                              : "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"} 
+                          />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
-                {overlayImage && (
-                  <>
-                    <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm">
-                      {showOverlay ? 'Translated Text' : 'Original Text'}
-                    </div>
-                    <button
-                      onClick={() => setShowOverlay(!showOverlay)}
-                      className="absolute top-2 right-2 bg-black bg-opacity-50 text-white p-2 rounded-full hover:bg-opacity-75 transition-opacity"
-                      aria-label="Toggle between original and translated view"
-                    >
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-                          d={showOverlay 
-                            ? "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" 
-                            : "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"} 
-                        />
-                      </svg>
-                    </button>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="text-center">
-                <p className="text-gray-500">No image selected</p>
-              </div>
-            )}
+              ) : (
+                <div className="text-center relative z-10">
+                  <p className="text-gray-500 text-lg">Take a photo or upload image</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Bottom sections - fixed height */}
+          <div className="flex flex-col mt-auto">
+            {/* AI Assistant buttons */}
+            <div className="px-2 py-1">
+              {showAIResponse ? (
+                <div className="relative bg-blue-50 rounded-lg p-4 shadow-lg border border-blue-100">
+                  <div className="min-h-[12rem]">
+                    <p>this is a test AI message, will be replace by LLM answers. stay tuned</p>
+                  </div>
+                  <button 
+                    onClick={() => setShowAIResponse(false)}
+                    className="absolute top-2 right-2 text-blue-500 hover:text-blue-700"
+                  >
+                    Return
+                  </button>
+                </div>
+              ) : (
+                <div className="flex justify-center space-x-2 sm:space-x-4">
+                  <button
+                    onClick={() => setShowAIResponse(true)}
+                    className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-800 font-semibold rounded-lg transition-colors shadow-lg border border-blue-100 flex items-center justify-center text-sm sm:text-lg px-2 py-2"
+                  >
+                    Explain the content
+                  </button>
+                  <button
+                    onClick={() => setShowAIResponse(true)}
+                    className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-800 font-semibold rounded-lg transition-colors shadow-lg border border-blue-100 flex items-center justify-center text-sm sm:text-lg px-2 py-2"
+                  >
+                    Maybe you want to ask this?
+                  </button>
+                  <button
+                    onClick={() => setShowAIResponse(true)}
+                    className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-800 font-semibold rounded-lg transition-colors shadow-lg border border-blue-100 flex items-center justify-center text-sm sm:text-lg px-2 py-2"
+                  >
+                    Custom
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Camera buttons */}
+            <div className="py-2">
+              <BottomActionBar />
+            </div>
           </div>
         </div>
-
-        {/* AI Assistant Area - Now part of the main flow */}
-        <div className="fixed bottom-[5.5rem] left-0 right-0 px-2 z-40">
-          {showAIResponse ? (
-            <div className="relative bg-blue-50 rounded-lg p-4 shadow-lg border border-blue-100 max-h-[calc(100vh-24rem)] overflow-y-auto">
-              <div className="min-h-[12rem]">
-                <p>this is a test AI message, will be replace by LLM answers. stay tuned</p>
-              </div>
-              <button 
-                onClick={() => {
-                  console.log('Return clicked');
-                  setShowAIResponse(false);
-                }}
-                className="absolute top-2 right-2 text-blue-500 hover:text-blue-700"
-              >
-                Return
-              </button>
-            </div>
-          ) : (
-            <div className="flex justify-center space-x-4">
-              {/* First button */}
-              <button
-                onClick={(e) => {
-                  (e.target as HTMLElement).blur();
-                  setShowAIResponse(true);
-                }}
-                tabIndex={-1}
-                className="flex-1 bg-blue-50 hover:bg-blue-100 focus:bg-blue-50 active:bg-blue-100 text-gray-700 font-semibold py-5 px-5 rounded-lg transition-colors shadow-lg border border-blue-100 min-h-[5rem] flex items-center justify-center text-lg"
-              >
-                Explain the content
-              </button>
-
-              {/* Middle button - Let's inspect its container */}
-              <div className="flex-1">
-                <button
-                  onClick={(e) => {
-                    (e.target as HTMLElement).blur();
-                    setShowAIResponse(true);
-                  }}
-                  tabIndex={-1}
-                  className="w-full bg-blue-50 hover:bg-blue-100 focus:bg-blue-50 active:bg-blue-100 text-gray-700 font-semibold py-5 px-5 rounded-lg transition-colors shadow-lg border border-blue-100 min-h-[5rem] flex items-center justify-center text-lg"
-                >
-                  Maybe you want to ask this?
-                </button>
-              </div>
-
-              {/* Third button */}
-              <button
-                onClick={(e) => {
-                  (e.target as HTMLElement).blur();
-                  setShowAIResponse(true);
-                }}
-                tabIndex={-1}
-                className="flex-1 bg-blue-50 hover:bg-blue-100 focus:bg-blue-50 active:bg-blue-100 text-gray-700 font-semibold py-5 px-5 rounded-lg transition-colors shadow-lg border border-blue-100 min-h-[5rem] flex items-center justify-center text-lg"
-              >
-                Custom
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <BottomActionBar />
+      </main>
     </div>
   )
 }
